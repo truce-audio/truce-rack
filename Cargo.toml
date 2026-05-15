@@ -23,14 +23,17 @@ repository = "https://github.com/truce-audio/truce-rack"
 rust-version = "1.90"
 
 [workspace.dependencies]
-truce-rack-core = { path = "crates/truce-rack-core" }
-truce-rack-clap = { path = "crates/truce-rack-clap" }
-truce-rack-vst3 = { path = "crates/truce-rack-vst3" }
-truce-rack-au = { path = "crates/truce-rack-au" }
-truce-rack-au3 = { path = "crates/truce-rack-au3" }
-truce-rack-lv2 = { path = "crates/truce-rack-lv2" }
-truce-rack-standalone = { path = "crates/truce-rack-standalone" }
-truce-rack-test = { path = "crates/truce-rack-test" }
+# `path` is used for in-workspace builds; `version` is what the
+# published crate references on crates.io. `cargo publish` requires
+# a non-path requirement for downstream resolution.
+truce-rack-core = { path = "crates/truce-rack-core", version = "0.9.0" }
+truce-rack-clap = { path = "crates/truce-rack-clap", version = "0.9.0" }
+truce-rack-vst3 = { path = "crates/truce-rack-vst3", version = "0.9.0" }
+truce-rack-au = { path = "crates/truce-rack-au", version = "0.9.0" }
+truce-rack-au3 = { path = "crates/truce-rack-au3", version = "0.9.0" }
+truce-rack-lv2 = { path = "crates/truce-rack-lv2", version = "0.9.0" }
+truce-rack-standalone = { path = "crates/truce-rack-standalone", version = "0.9.0" }
+truce-rack-test = { path = "crates/truce-rack-test", version = "0.9.0" }
 smallvec = "1.13"
 thiserror = "2.0"
 clap-sys = "0.5"
