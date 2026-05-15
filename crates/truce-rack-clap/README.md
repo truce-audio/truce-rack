@@ -1,7 +1,7 @@
 # truce-rack-clap
 
 [![crates.io](https://img.shields.io/crates/v/truce-rack-clap.svg)](https://crates.io/crates/truce-rack-clap)
-[![docs.rs](https://docs.rs/truce-rack-clap/badge.svg)](https://docs.rs/truce-rack-clap)
+[docs.rs](https://docs.rs/truce-rack-clap)
 
 CLAP host implementation for the [**truce-rack**][repo] audio
 plugin framework. Pure-Rust on top of `clap-sys`. Implements scan,

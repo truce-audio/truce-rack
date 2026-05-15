@@ -1,7 +1,7 @@
 # truce-rack-au
 
 [![crates.io](https://img.shields.io/crates/v/truce-rack-au.svg)](https://crates.io/crates/truce-rack-au)
-[![docs.rs](https://docs.rs/truce-rack-au/badge.svg)](https://docs.rs/truce-rack-au)
+[docs.rs](https://docs.rs/truce-rack-au)
 
 Audio Unit v2 host implementation for the [**truce-rack**][repo]
 audio plugin framework. Apple-only. Pure-Rust on top of the

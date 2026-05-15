@@ -1,7 +1,7 @@
 # truce-rack
 
 [![crates.io](https://img.shields.io/crates/v/truce-rack.svg)](https://crates.io/crates/truce-rack)
-[![docs.rs](https://docs.rs/truce-rack/badge.svg)](https://docs.rs/truce-rack)
+[docs.rs](https://docs.rs/truce-rack)
 
 A Rust library for hosting audio plugins. CLAP and VST3 by
 default; Audio Unit and LV2 behind features.
@@ -197,15 +197,15 @@ truce-rack/
 
 | Crate | crates.io | docs.rs |
 | ----- | --------- | ------- |
-| [`truce-rack`](crates/truce-rack) | [![crates.io](https://img.shields.io/crates/v/truce-rack.svg)](https://crates.io/crates/truce-rack) | [![docs.rs](https://docs.rs/truce-rack/badge.svg)](https://docs.rs/truce-rack) |
-| [`truce-rack-core`](crates/truce-rack-core) | [![crates.io](https://img.shields.io/crates/v/truce-rack-core.svg)](https://crates.io/crates/truce-rack-core) | [![docs.rs](https://docs.rs/truce-rack-core/badge.svg)](https://docs.rs/truce-rack-core) |
-| [`truce-rack-clap`](crates/truce-rack-clap) | [![crates.io](https://img.shields.io/crates/v/truce-rack-clap.svg)](https://crates.io/crates/truce-rack-clap) | [![docs.rs](https://docs.rs/truce-rack-clap/badge.svg)](https://docs.rs/truce-rack-clap) |
-| [`truce-rack-vst3`](crates/truce-rack-vst3) | [![crates.io](https://img.shields.io/crates/v/truce-rack-vst3.svg)](https://crates.io/crates/truce-rack-vst3) | [![docs.rs](https://docs.rs/truce-rack-vst3/badge.svg)](https://docs.rs/truce-rack-vst3) |
-| [`truce-rack-au`](crates/truce-rack-au) | [![crates.io](https://img.shields.io/crates/v/truce-rack-au.svg)](https://crates.io/crates/truce-rack-au) | [![docs.rs](https://docs.rs/truce-rack-au/badge.svg)](https://docs.rs/truce-rack-au) |
-| [`truce-rack-au3`](crates/truce-rack-au3) | [![crates.io](https://img.shields.io/crates/v/truce-rack-au3.svg)](https://crates.io/crates/truce-rack-au3) | [![docs.rs](https://docs.rs/truce-rack-au3/badge.svg)](https://docs.rs/truce-rack-au3) |
-| [`truce-rack-lv2`](crates/truce-rack-lv2) | [![crates.io](https://img.shields.io/crates/v/truce-rack-lv2.svg)](https://crates.io/crates/truce-rack-lv2) | [![docs.rs](https://docs.rs/truce-rack-lv2/badge.svg)](https://docs.rs/truce-rack-lv2) |
-| [`truce-rack-standalone`](crates/truce-rack-standalone) | [![crates.io](https://img.shields.io/crates/v/truce-rack-standalone.svg)](https://crates.io/crates/truce-rack-standalone) | [![docs.rs](https://docs.rs/truce-rack-standalone/badge.svg)](https://docs.rs/truce-rack-standalone) |
-| [`truce-rack-test`](crates/truce-rack-test) | [![crates.io](https://img.shields.io/crates/v/truce-rack-test.svg)](https://crates.io/crates/truce-rack-test) | [![docs.rs](https://docs.rs/truce-rack-test/badge.svg)](https://docs.rs/truce-rack-test) |
+| [`truce-rack`](crates/truce-rack) | [![crates.io](https://img.shields.io/crates/v/truce-rack.svg)](https://crates.io/crates/truce-rack) | [docs.rs](https://docs.rs/truce-rack) |
+| [`truce-rack-core`](crates/truce-rack-core) | [![crates.io](https://img.shields.io/crates/v/truce-rack-core.svg)](https://crates.io/crates/truce-rack-core) | [docs.rs](https://docs.rs/truce-rack-core) |
+| [`truce-rack-clap`](crates/truce-rack-clap) | [![crates.io](https://img.shields.io/crates/v/truce-rack-clap.svg)](https://crates.io/crates/truce-rack-clap) | [docs.rs](https://docs.rs/truce-rack-clap) |
+| [`truce-rack-vst3`](crates/truce-rack-vst3) | [![crates.io](https://img.shields.io/crates/v/truce-rack-vst3.svg)](https://crates.io/crates/truce-rack-vst3) | [docs.rs](https://docs.rs/truce-rack-vst3) |
+| [`truce-rack-au`](crates/truce-rack-au) | [![crates.io](https://img.shields.io/crates/v/truce-rack-au.svg)](https://crates.io/crates/truce-rack-au) | [docs.rs](https://docs.rs/truce-rack-au) |
+| [`truce-rack-au3`](crates/truce-rack-au3) | [![crates.io](https://img.shields.io/crates/v/truce-rack-au3.svg)](https://crates.io/crates/truce-rack-au3) | [docs.rs](https://docs.rs/truce-rack-au3) |
+| [`truce-rack-lv2`](crates/truce-rack-lv2) | [![crates.io](https://img.shields.io/crates/v/truce-rack-lv2.svg)](https://crates.io/crates/truce-rack-lv2) | [docs.rs](https://docs.rs/truce-rack-lv2) |
+| [`truce-rack-standalone`](crates/truce-rack-standalone) | [![crates.io](https://img.shields.io/crates/v/truce-rack-standalone.svg)](https://crates.io/crates/truce-rack-standalone) | [docs.rs](https://docs.rs/truce-rack-standalone) |
+| [`truce-rack-test`](crates/truce-rack-test) | [![crates.io](https://img.shields.io/crates/v/truce-rack-test.svg)](https://crates.io/crates/truce-rack-test) | [docs.rs](https://docs.rs/truce-rack-test) |
 
 ## Troubleshooting
 
