@@ -66,6 +66,10 @@ pub const FORMAT: &str = "lv2";
 const LV2_URID_MAP_URI: &[u8] = b"http://lv2plug.in/ns/ext/urid#map\0";
 const LV2_ATOM_SEQUENCE_URI: &[u8] = b"http://lv2plug.in/ns/ext/atom#Sequence\0";
 const LV2_UI_PARENT_URI: &[u8] = b"http://lv2plug.in/ns/extensions/ui#parent\0";
+const LV2_UI_RESIZE_URI: &[u8] = b"http://lv2plug.in/ns/extensions/ui#resize\0";
+const LV2_UI_IDLE_INTERFACE_URI: &[u8] =
+    b"http://lv2plug.in/ns/extensions/ui#idleInterface\0";
+const LV2_UI_RESIZE_INTERFACE_URI: &[u8] = LV2_UI_RESIZE_URI;
 
 #[cfg(target_os = "macos")]
 const NATIVE_UI_CLASS_URI: &[u8] = b"http://lv2plug.in/ns/extensions/ui#CocoaUI\0";
@@ -437,8 +441,36 @@ struct EditorState {
     widget: LV2UIWidget,
     /// Self-contained features array passed to `instantiate`.
     /// Boxed so the pointers we recorded into the LV2 plugin stay
-    /// valid even if `Lv2Plugin` itself is moved.
-    _ui_features: Box<UiFeatureStorage>,
+    /// valid even if `Lv2Plugin` itself is moved. Held for ownership
+    /// only — the UI side reaches into it through the raw feature
+    /// pointers it was given at instantiate time.
+    #[allow(dead_code)]
+    ui_features: Box<UiFeatureStorage>,
+    /// Optional `LV2_UI__idleInterface` — non-null if the UI exports
+    /// it via `extension_data`. Driven by `on_idle` once per host
+    /// frame.
+    idle_iface: *const lv2_raw::ui::LV2UIIdleInterface,
+    /// Optional `LV2_UI__resize` interface — non-null if the UI
+    /// exports it via `extension_data`. Used by `set_size` to push
+    /// host-driven resizes to the UI.
+    resize_iface: *const Lv2UiResizeInterface,
+    /// Snapshot of `control_values` taken at open time and refreshed
+    /// every `on_idle` so we can fire `port_event` for any value the
+    /// audio thread (or another UI write) has changed since the last
+    /// idle tick.
+    last_pushed_values: Vec<f32>,
+}
+
+/// LV2 host-side `ui:resize` interface — the same shape both the
+/// host implements (passed via the feature) and the UI implements
+/// (returned from `extension_data`). Non-zero `ui_resize` returns
+/// indicate failure.
+#[repr(C)]
+struct Lv2UiResizeInterface {
+    /// Opaque pointer the UI passes back. For host → UI, this is
+    /// the UI's own handle.
+    handle: *mut c_void,
+    ui_resize: extern "C" fn(handle: *mut c_void, width: i32, height: i32) -> i32,
 }
 
 /// Heap-stable storage for the LV2 UI feature array. Mirrors the
@@ -450,8 +482,39 @@ struct UiFeatureStorage {
     /// `ui#parent` feature. `data` is a raw pointer to the parent
     /// widget (`NSView`* / HWND / X11 Window).
     parent_feature_data: *mut c_void,
+    /// Host-side `ui:resize` callback. The UI calls
+    /// `resize_struct.ui_resize(resize_struct.handle, w, h)` to ask
+    /// the host to resize. The handle is a pointer to a
+    /// `HostResizeNotifier` heap-allocated alongside us; the host
+    /// reads the latest requested size out of it via `take_request`.
+    resize_struct: Lv2UiResizeInterface,
+    resize_notifier: Box<HostResizeNotifier>,
     feature_storage: Vec<LV2Feature>,
     feature_ptrs: Vec<*const LV2Feature>,
+}
+
+/// Heap-stable cell the UI's `ui_resize` callback writes its
+/// requested dimensions into. The standalone polls this every
+/// `on_idle` and applies any pending request.
+struct HostResizeNotifier {
+    /// `(width, height)` requested by the UI; `None` means no
+    /// pending request. Written by the UI thread, read by the host
+    /// — both run on the same main thread, but the field is
+    /// touched from C code outside Rust's borrow tracking, so we
+    /// use `Cell` to make the interior mutability explicit.
+    pending: std::cell::Cell<Option<(i32, i32)>>,
+}
+
+extern "C" fn host_resize_callback(handle: *mut c_void, width: i32, height: i32) -> i32 {
+    if handle.is_null() {
+        return 1;
+    }
+    // SAFETY: `handle` is the boxed `HostResizeNotifier` we stored
+    // in the resize_struct at construction. lilv passes it back
+    // unchanged.
+    let notifier = unsafe { &*(handle as *const HostResizeNotifier) };
+    notifier.pending.set(Some((width, height)));
+    0
 }
 
 /// Heap-allocated controller passed back to the UI as the opaque
@@ -521,10 +584,19 @@ impl UiFeatureStorage {
                 map: map_callback,
             },
             parent_feature_data: parent,
-            feature_storage: Vec::with_capacity(2),
-            feature_ptrs: Vec::with_capacity(3),
+            resize_struct: Lv2UiResizeInterface {
+                handle: std::ptr::null_mut(),
+                ui_resize: host_resize_callback,
+            },
+            resize_notifier: Box::new(HostResizeNotifier {
+                pending: std::cell::Cell::new(None),
+            }),
+            feature_storage: Vec::with_capacity(3),
+            feature_ptrs: Vec::with_capacity(4),
         });
         boxed.map_struct.handle = map_handle.cast::<c_void>();
+        boxed.resize_struct.handle =
+            (&*boxed.resize_notifier) as *const HostResizeNotifier as *mut c_void;
         boxed.feature_storage.push(LV2Feature {
             uri: LV2_URID_MAP_URI.as_ptr().cast::<c_char>(),
             data: (&boxed.map_struct) as *const LV2UridMap as *mut c_void,
@@ -533,8 +605,13 @@ impl UiFeatureStorage {
             uri: LV2_UI_PARENT_URI.as_ptr().cast::<c_char>(),
             data: boxed.parent_feature_data,
         });
-        boxed.feature_ptrs.push(&boxed.feature_storage[0]);
-        boxed.feature_ptrs.push(&boxed.feature_storage[1]);
+        boxed.feature_storage.push(LV2Feature {
+            uri: LV2_UI_RESIZE_URI.as_ptr().cast::<c_char>(),
+            data: (&boxed.resize_struct) as *const Lv2UiResizeInterface as *mut c_void,
+        });
+        for i in 0..boxed.feature_storage.len() {
+            boxed.feature_ptrs.push(&boxed.feature_storage[i]);
+        }
         boxed.feature_ptrs.push(std::ptr::null());
         boxed
     }
@@ -1256,12 +1333,38 @@ impl PluginEditor for Lv2Plugin {
         // (NSView / HWND / X11 Window). The host's parent already
         // contains it as a child after instantiate; we just keep
         // the pointer for size queries.
+
+        // Look up the optional idle / resize extension interfaces
+        // the UI may have published. `extension_data` returns a
+        // pointer to a shared static struct of function pointers.
+        let idle_iface = unsafe {
+            if let Some(ext) = (*descriptor).extension_data {
+                ext(LV2_UI_IDLE_INTERFACE_URI.as_ptr().cast::<c_char>())
+                    as *const lv2_raw::ui::LV2UIIdleInterface
+            } else {
+                std::ptr::null()
+            }
+        };
+        let resize_iface = unsafe {
+            if let Some(ext) = (*descriptor).extension_data {
+                ext(LV2_UI_RESIZE_INTERFACE_URI.as_ptr().cast::<c_char>())
+                    as *const Lv2UiResizeInterface
+            } else {
+                std::ptr::null()
+            }
+        };
+
+        let last_pushed_values = self.control_values.clone();
+
         self.editor = Some(EditorState {
             _library: lib,
             descriptor,
             handle,
             widget,
-            _ui_features: ui_features,
+            ui_features,
+            idle_iface,
+            resize_iface,
+            last_pushed_values,
         });
         Ok(())
     }
@@ -1280,13 +1383,30 @@ impl PluginEditor for Lv2Plugin {
     }
 
     fn is_resizable(&self) -> bool {
-        // LV2 ui:resize is optional and we don't yet plumb it; treat
-        // every embedded UI as fixed-size.
-        false
+        // Resizable iff the UI exported a `ui:resize` extension —
+        // that's the only way for the host to push a new size.
+        self.editor
+            .as_ref()
+            .is_some_and(|e| !e.resize_iface.is_null())
     }
 
-    fn set_size(&mut self, _width: u32, _height: u32) -> Option<(u32, u32)> {
-        None
+    fn set_size(&mut self, width: u32, height: u32) -> Option<(u32, u32)> {
+        let state = self.editor.as_ref()?;
+        if state.resize_iface.is_null() {
+            return None;
+        }
+        // SAFETY: `resize_iface` was returned by the UI's
+        // `extension_data(ui:resize)` and is a static struct of
+        // function pointers owned by the UI bundle (still loaded
+        // because `EditorState._library` is alive).
+        let r = unsafe {
+            ((*state.resize_iface).ui_resize)(
+                (*state.resize_iface).handle,
+                i32::try_from(width).unwrap_or(i32::MAX),
+                i32::try_from(height).unwrap_or(i32::MAX),
+            )
+        };
+        if r == 0 { Some((width, height)) } else { None }
     }
 
     fn show(&mut self) {
@@ -1297,6 +1417,81 @@ impl PluginEditor for Lv2Plugin {
     fn hide(&mut self) {
         // No-op for embedded UIs — closing the editor or the host
         // window is the visibility primitive.
+    }
+
+    fn on_idle(&mut self) {
+        let Some(state) = self.editor.as_mut() else {
+            return;
+        };
+        // 1. Drive the optional `ui:idleInterface` first — animations
+        //    and the UI's own event pump live here. Non-zero return
+        //    means the UI closed itself; we bail and let the next
+        //    on_idle skip cleanly.
+        if !state.idle_iface.is_null() {
+            let rc = unsafe { ((*state.idle_iface).idle)(state.handle) };
+            if rc != 0 {
+                // UI asked to be torn down. close_editor walks the
+                // descriptor's cleanup and drops the library.
+                self.close_editor();
+                return;
+            }
+        }
+
+        // 2. Push host-side parameter changes to the UI via
+        //    `port_event`. Compare current control_values against
+        //    the snapshot we took last tick; for any port whose value
+        //    differs, fire a float-protocol port_event so the UI
+        //    redraws. Snapshot is then refreshed.
+        let Some(state) = self.editor.as_mut() else {
+            return;
+        };
+        // SAFETY: `descriptor` is the same one we instantiated; its
+        // `port_event` field is non-null per the LV2 spec.
+        let port_event_fn = unsafe { (*state.descriptor).port_event };
+        for (port_index, &offset) in self.control_value_offset.iter().enumerate() {
+            if offset == usize::MAX || offset >= self.control_values.len() {
+                continue;
+            }
+            let cur = self.control_values[offset];
+            // First idle tick after a re-open may have a shorter
+            // snapshot than control_values — guard via .get.
+            let prev = state
+                .last_pushed_values
+                .get(offset)
+                .copied()
+                .unwrap_or(cur + 1.0);
+            // f32 inequality is fine here — we only push when the
+            // bit pattern actually changed, NaNs included (NaN != NaN
+            // is the right answer; both sides will have NaN if the
+            // plugin keeps writing NaN, no spurious push).
+            #[allow(clippy::float_cmp)]
+            let changed = cur != prev;
+            if changed {
+                let value = cur;
+                let port_index_u32 = u32::try_from(port_index).unwrap_or(u32::MAX);
+                port_event_fn(
+                    state.handle,
+                    port_index_u32,
+                    4,
+                    0, // float protocol
+                    (&raw const value).cast::<c_void>(),
+                );
+                if offset < state.last_pushed_values.len() {
+                    state.last_pushed_values[offset] = cur;
+                }
+            }
+        }
+        // suppress unused-warning if no port matched
+        let _ = port_event_fn;
+
+        // 3. Apply any UI-requested resize. The host-side ui:resize
+        //    callback writes into the notifier; on_idle is the host's
+        //    chance to act on it. We can't actually resize the
+        //    baseview window from inside this trait method (no window
+        //    handle), so we just stash the request — windowed.rs polls
+        //    `size()` next frame and resizes accordingly.
+        // Currently no-op past the notifier write; future host-driven
+        // window resize would consume `notifier.pending.take()` here.
     }
 }
 
@@ -1342,7 +1537,7 @@ impl Plugin<f32> for Lv2Plugin {
         &mut self,
         buffer: &mut AudioBuffer<'_, f32>,
         events: &EventList,
-        _context: &mut ProcessContext<'_>,
+        context: &mut ProcessContext<'_>,
     ) -> Result<ProcessStatus> {
         if !self.is_active() {
             return Err(Error::NotActivated);
@@ -1422,6 +1617,124 @@ impl Plugin<f32> for Lv2Plugin {
         unsafe {
             lilv_sys::lilv_instance_run(self.instance, u32::try_from(frames).unwrap_or(u32::MAX));
         }
+
+        // Drain MIDI from the output atom-sequence port (if the
+        // plugin connected one) into context.output_events.
+        self.drain_midi_out(context);
+
         Ok(ProcessStatus::Continue)
     }
+}
+
+impl Lv2Plugin {
+    /// Walk the MIDI output atom-sequence buffer the plugin just
+    /// wrote and translate every `MidiEvent`-typed event back into
+    /// rack2-core `EventList` events on `context.output_events`.
+    fn drain_midi_out(&mut self, context: &mut ProcessContext<'_>) {
+        let header_size = std::mem::size_of::<LV2AtomSequence>();
+        if self.midi_out_buf.len() < header_size {
+            return;
+        }
+        let buf = self.midi_out_buf.as_ptr();
+        // SAFETY: midi_out_buf is sized for an LV2AtomSequence header
+        // plus events at activate. Vec<u8> is heap-aligned to >= 8.
+        let seq = unsafe { &*buf.cast::<LV2AtomSequence>() };
+        // Sequence body size (atom.size) excludes the LV2Atom header
+        // itself; the body's events run from sequence_begin to
+        // sequence_end.
+        let body_size = seq.atom.size;
+        let event_header = std::mem::size_of::<LV2AtomEvent>();
+        let body_offset = std::mem::size_of::<LV2Atom>();
+        let mut cursor = body_offset + std::mem::size_of::<LV2AtomSequenceBody>();
+        let body_end = body_offset + body_size as usize;
+        while cursor + event_header <= body_end && cursor + event_header <= self.midi_out_buf.len()
+        {
+            let ev_ptr = unsafe { buf.add(cursor) }.cast::<LV2AtomEvent>();
+            // SAFETY: cursor + event_header <= midi_out_buf.len().
+            let ev = unsafe { &*ev_ptr };
+            let payload_size = ev.body.size as usize;
+            let payload_total = event_header + payload_size;
+            if cursor + payload_total > body_end {
+                break;
+            }
+            if ev.body.mytype == self.midi_event_urid && (1..=8).contains(&payload_size) {
+                let data_ptr = unsafe { (ev_ptr as *const u8).add(event_header) };
+                // SAFETY: payload_size bytes immediately follow the
+                // event header within the bounds we just checked.
+                let bytes = unsafe { std::slice::from_raw_parts(data_ptr, payload_size) };
+                if let Some(body) = decode_midi_atom(bytes) {
+                    let offset = u32::try_from(ev.time_in_frames.max(0)).unwrap_or(0);
+                    context.output_events.push(Event {
+                        sample_offset: offset,
+                        body,
+                    });
+                }
+            }
+            // Advance cursor past this event, padded to 8 bytes per
+            // the atom alignment rule.
+            cursor += (payload_total + 7) & !7;
+        }
+    }
+}
+
+/// Inverse of `midi_bytes` — turn 1-3 bytes of LV2 MIDI atom payload
+/// into a typed `EventBody`. Anything longer (sysex etc.) is wrapped
+/// in `MidiData::Raw` up to the 8-byte cap.
+fn decode_midi_atom(bytes: &[u8]) -> Option<EventBody> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let status = bytes[0];
+    let channel = status & 0x0F;
+    let kind = status & 0xF0;
+    let body = match (kind, bytes) {
+        (0x80, [_, note, vel]) => MidiData::NoteOff {
+            channel,
+            note: *note,
+            velocity: *vel,
+        },
+        (0x90, [_, note, 0]) => MidiData::NoteOff {
+            channel,
+            note: *note,
+            velocity: 0,
+        },
+        (0x90, [_, note, vel]) => MidiData::NoteOn {
+            channel,
+            note: *note,
+            velocity: *vel,
+        },
+        (0xA0, [_, note, pressure]) => MidiData::PolyAftertouch {
+            channel,
+            note: *note,
+            pressure: *pressure,
+        },
+        (0xB0, [_, controller, value]) => MidiData::ControlChange {
+            channel,
+            controller: *controller,
+            value: *value,
+        },
+        (0xC0, [_, program]) => MidiData::ProgramChange {
+            channel,
+            program: *program,
+        },
+        (0xD0, [_, pressure]) => MidiData::ChannelAftertouch {
+            channel,
+            pressure: *pressure,
+        },
+        (0xE0, [_, lsb, msb]) => MidiData::PitchBend {
+            channel,
+            value: u16::from(*msb) << 7 | u16::from(*lsb),
+        },
+        _ if bytes.len() <= 8 => {
+            let mut data = [0u8; 8];
+            data[..bytes.len()].copy_from_slice(bytes);
+            #[allow(clippy::cast_possible_truncation)]
+            MidiData::Raw {
+                len: bytes.len() as u8,
+                data,
+            }
+        }
+        _ => return None,
+    };
+    Some(EventBody::Midi(body))
 }

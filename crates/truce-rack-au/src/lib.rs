@@ -36,7 +36,8 @@ use truce_rack_core::scanner::PluginScanner;
 use objc2_audio_toolbox::{
     AURenderCallbackStruct, AudioComponent, AudioComponentCopyName, AudioComponentDescription,
     AudioComponentFindNext, AudioComponentFlags, AudioComponentInstance,
-    AudioComponentInstanceDispose, AudioComponentInstanceNew, AudioUnitGetParameter,
+    AudioComponentInstanceDispose, AudioComponentInstanceNew, AudioComponentInstantiate,
+    AudioComponentInstantiationOptions, AudioUnitGetParameter,
     AudioUnitGetProperty, AudioUnitGetPropertyInfo, AudioUnitInitialize, AudioUnitParameterID,
     AudioUnitParameterInfo, AudioUnitRender, AudioUnitRenderActionFlags, AudioUnitSetParameter,
     AudioUnitSetProperty, AudioUnitUninitialize, AUPreset, MusicDeviceMIDIEvent,
@@ -372,6 +373,94 @@ fn send_midi(unit: AudioComponentInstance, event: &truce_rack_core::events::Even
     let _ = unsafe { MusicDeviceMIDIEvent(unit, status, d1, d2, offset) };
 }
 
+/// Synchronous `AudioComponentInstanceNew` wrapper. Used for AU v2
+/// and for AU v3 plugins that don't set `RequiresAsyncInstantiation`.
+fn instantiate_sync(
+    component: AudioComponent,
+    info_path: &std::path::Path,
+) -> Result<AudioComponentInstance> {
+    let mut instance: AudioComponentInstance = ptr::null_mut();
+    let status = unsafe {
+        AudioComponentInstanceNew(component, ptr::NonNull::new_unchecked(&raw mut instance))
+    };
+    if status != 0 || instance.is_null() {
+        return Err(Error::LoadFailed {
+            path: info_path.to_path_buf(),
+            reason: format!("AudioComponentInstanceNew failed with OSStatus {status}"),
+        });
+    }
+    Ok(instance)
+}
+
+/// Asynchronous instantiation via `AudioComponentInstantiate`,
+/// required for AU v3 plugins flagged `RequiresAsyncInstantiation`
+/// (sandboxed App-Extension-hosted units). The completion block
+/// can be dispatched from any thread; we pump the main thread's
+/// `CFRunLoop` until the result lands or a 10-second deadline
+/// elapses.
+fn instantiate_async(
+    component: AudioComponent,
+    info_path: &std::path::Path,
+) -> Result<AudioComponentInstance> {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, Ordering};
+    use std::time::{Duration, Instant};
+
+    let done = Arc::new(AtomicBool::new(false));
+    let inst_ptr: Arc<AtomicPtr<std::ffi::c_void>> =
+        Arc::new(AtomicPtr::new(ptr::null_mut()));
+    let status_atom = Arc::new(AtomicI32::new(0));
+
+    let done_clone = Arc::clone(&done);
+    let inst_clone = Arc::clone(&inst_ptr);
+    let status_clone = Arc::clone(&status_atom);
+
+    // RcBlock heap-allocates the block and refcounts via Apple's
+    // blocks runtime; AudioComponentInstantiate retains it for the
+    // duration of the call, releases after firing. As long as our
+    // Arc holders outlive the block (which we ensure by holding
+    // them until `done == true`), the closure's captures stay live.
+    let block = block2::RcBlock::new(
+        move |inst: AudioComponentInstance, status: i32| {
+            inst_clone.store(inst.cast(), Ordering::Release);
+            status_clone.store(status, Ordering::Release);
+            done_clone.store(true, Ordering::Release);
+        },
+    );
+    unsafe {
+        AudioComponentInstantiate(
+            component,
+            AudioComponentInstantiationOptions::empty(),
+            &block,
+        );
+    }
+
+    // Pump the main runloop in 50ms slices until the completion
+    // block writes done=true. The runloop dispatches the block to
+    // the main queue; without pumping, it'd never fire.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done.load(Ordering::Acquire) {
+        if Instant::now() > deadline {
+            return Err(Error::LoadFailed {
+                path: info_path.to_path_buf(),
+                reason: "AudioComponentInstantiate timed out after 10s".into(),
+            });
+        }
+        let mode = unsafe { objc2_core_foundation::kCFRunLoopDefaultMode };
+        objc2_core_foundation::CFRunLoop::run_in_mode(mode, 0.05, true);
+    }
+
+    let status = status_atom.load(Ordering::Acquire);
+    let raw = inst_ptr.load(Ordering::Acquire);
+    if status != 0 || raw.is_null() {
+        return Err(Error::LoadFailed {
+            path: info_path.to_path_buf(),
+            reason: format!("AudioComponentInstantiate failed with OSStatus {status}"),
+        });
+    }
+    Ok(raw.cast::<objc2_audio_toolbox::OpaqueAudioComponentInstance>())
+}
+
 fn type_category(type_code: u32) -> PluginCategory {
     match type_code {
         t if t == kAudioUnitType_MusicDevice => PluginCategory::Instrument,
@@ -581,16 +670,31 @@ impl AuPlugin {
                 reason: format!("no AU matching {}", info.unique_id),
             });
         }
-        let mut instance: AudioComponentInstance = ptr::null_mut();
-        let status = unsafe {
-            AudioComponentInstanceNew(component, ptr::NonNull::new_unchecked(&raw mut instance))
+
+        // Re-query the component's actual flags so we can detect
+        // RequiresAsyncInstantiation — `desc` only carries our scan
+        // mask, not the component's own.
+        let mut comp_desc = AudioComponentDescription {
+            componentType: 0,
+            componentSubType: 0,
+            componentManufacturer: 0,
+            componentFlags: 0,
+            componentFlagsMask: 0,
         };
-        if status != 0 || instance.is_null() {
-            return Err(Error::LoadFailed {
-                path: info.path.clone(),
-                reason: format!("AudioComponentInstanceNew failed with OSStatus {status}"),
-            });
-        }
+        let _ = unsafe {
+            objc2_audio_toolbox::AudioComponentGetDescription(
+                component,
+                ptr::NonNull::new_unchecked(&raw mut comp_desc),
+            )
+        };
+        let flags = AudioComponentFlags::from_bits_retain(comp_desc.componentFlags);
+        let needs_async = flags.contains(AudioComponentFlags::RequiresAsyncInstantiation);
+
+        let instance = if needs_async {
+            instantiate_async(component, &info.path)?
+        } else {
+            instantiate_sync(component, &info.path)?
+        };
         let param_ids = unsafe { fetch_parameter_ids(instance) };
         let has_editor = unsafe { has_cocoa_ui(instance) };
         let mut updated = info.clone();

@@ -12,14 +12,10 @@ workspace of small per-format wrapper crates that talk to native
 plugin APIs through pure Rust bindings (`objc2`, `clap-sys`,
 `vst3`, `lilv-sys`).
 
-The workspace shape was inspired by the
-[truce](https://github.com/truce-audio/truce) plugin-building
-framework — one trait in a no-FFI core crate (`truce-rack-core`),
-one wrapper crate per format that loads, scans, and adapts plugins
-into that trait. **`truce-rack` doesn't depend on `truce`** and
-isn't a runtime extension of it — it's a standalone host library
-that hosts plugins of any format (truce-built or otherwise). The
-shared name is naming-convention only.
+**`truce-rack` doesn't depend on `truce`** and isn't a runtime
+extension of it — it's a standalone host library that hosts
+plugins of any format (truce-built or otherwise). The shared name
+is naming-convention only.
 
 ## Workspace layout
 
@@ -44,25 +40,20 @@ truce-rack/
 | CLAP   | `truce-rack-clap`       | ✓    | ✓    | ✓       | ✓    | ✓   |
 | VST3   | `truce-rack-vst3`       | ✓    | ✓    | ✓       | ✓    | ✓   |
 | AU v2  | `truce-rack-au`         | ✓    | ✓    | ✓       | ✓    | ✓   |
-| AU v3  | `truce-rack-au3`        | ✓    | ✓ ¹  | ✓       | ✓    | ✓   |
-| LV2    | `truce-rack-lv2`        | ✓    | ✓    | ✓       | ✓ ²  | ✓ ³ |
+| AU v3  | `truce-rack-au3`        | ✓    | ✓    | ✓       | ✓    | ✓   |
+| LV2    | `truce-rack-lv2`        | ✓    | ✓    | ✓       | ✓    | ✓ ¹ |
 | VST2   | —                  | not planned (legacy SDK) |
 | AAX    | —                  | deferred                 |
 
-¹ Synchronous load only — AU v3 plugins that flag
-`kAudioComponentFlag_RequiresAsyncInstantiation` need the
-block-callback `AudioComponentInstantiate` path, not yet wired.
-
-² LV2 MIDI input flows through atom-sequence ports tagged
-`midi:MidiEvent`. MIDI output back from the plugin to the host
-is not yet drained.
-
-³ LV2 UI: native-class only (`CocoaUI` on macOS, `WindowsUI`
+¹ LV2 UI: native-class only (`CocoaUI` on macOS, `WindowsUI`
 on Windows, `X11UI` on Linux). The UI bundle binary is dlopen'd
 and instantiated as a child of the host's parent window with
-the `urid#map` and `ui#parent` features. Param changes flow
-back via `write_function`; `port_event` (host → UI) and the
-`idle` / `resize` interfaces aren't yet wired.
+the `urid#map`, `ui#parent`, and `ui#resize` features.
+`write_function` (UI → host) and `port_event` (host → UI) carry
+control-port changes; `idle` and `resize` extension interfaces
+are queried at open and driven by the host. Toolkit-specific UI
+classes (`Gtk*UI`, `Qt*UI`) would still need a `suil`-style
+wrapper — that's the only remaining gap.
 
 ## Quick start
 

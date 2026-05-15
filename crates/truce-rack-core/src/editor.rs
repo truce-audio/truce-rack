@@ -103,4 +103,12 @@ pub trait PluginEditor {
 
     /// Hide the editor view without destroying it.
     fn hide(&mut self);
+
+    /// Per-frame hook the host calls on the UI thread (typically
+    /// at the parent window's frame rate). Formats whose plugins
+    /// expose an idle / animation callback (LV2 `ui:idleInterface`,
+    /// CLAP `gui.suggest_title`, future AU `GestureKit` ticks)
+    /// override this to drive their plugin. Default is a no-op
+    /// for formats that don't need it.
+    fn on_idle(&mut self) {}
 }

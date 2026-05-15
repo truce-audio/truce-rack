@@ -188,7 +188,16 @@ impl<P> WindowHandler for StandaloneHandler<P>
 where
     P: PluginCore + Plugin<f32> + Send + 'static,
 {
-    fn on_frame(&mut self, _window: &mut Window) {}
+    fn on_frame(&mut self, _window: &mut Window) {
+        // Drive the editor's per-frame idle hook. LV2 uses this to
+        // tick its `ui:idleInterface`, push host→UI parameter updates,
+        // and animate; other formats no-op via the trait default.
+        if let Ok(mut guard) = self.plugin.try_lock()
+            && let Some(editor) = guard.editor()
+        {
+            editor.on_idle();
+        }
+    }
 
     fn on_event(&mut self, _window: &mut Window, event: Event) -> EventStatus {
         match event {

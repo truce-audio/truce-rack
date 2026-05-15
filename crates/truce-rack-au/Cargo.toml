@@ -22,6 +22,9 @@ objc2-audio-toolbox = { version = "0.3", features = [
     "AUCocoaUIView",
     "MusicDevice",
     "objc2-core-foundation",
+    # Enables the `AudioComponentInstantiate` extern (async path
+    # for AU v3 plugins flagged `RequiresAsyncInstantiation`).
+    "block2",
 ] }
 objc2-core-audio-types = { version = "0.3", features = ["CoreAudioBaseTypes"] }
 objc2-core-foundation = { version = "0.3", features = [
@@ -32,8 +35,17 @@ objc2-core-foundation = { version = "0.3", features = [
     "CFError",
     "CFPropertyList",
     "CFURL",
+    # `CFRunLoop` (+ `CFDate` for `CFTimeInterval`) drive the
+    # main-thread runloop pump while waiting for AU v3 async
+    # instantiation completion blocks to fire.
+    "CFRunLoop",
+    "CFDate",
 ] }
 objc2-app-kit = { version = "0.3", features = ["NSView", "NSResponder"] }
+# Used to construct the Objective-C completion block for
+# `AudioComponentInstantiate` when an AU v3 plugin sets the
+# RequiresAsyncInstantiation flag.
+block2 = "0.6"
 
 [lints]
 workspace = true
