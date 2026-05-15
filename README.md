@@ -46,17 +46,17 @@ To enable additional formats, opt in via features:
 truce-rack = { version = "1.0", features = ["au", "au3", "lv2"] }
 ```
 
-| Feature | Default | Crate it enables                                                       | Platforms      |
-| ------- | ------- | ---------------------------------------------------------------------- | -------------- |
-| `clap`  | ✓       | [`truce-rack-clap`](crates/truce-rack-clap)             | all            |
-| `vst3`  | ✓       | [`truce-rack-vst3`](crates/truce-rack-vst3)             | all            |
-| `au`    |         | [`truce-rack-au`](crates/truce-rack-au)                 | Apple          |
-| `au3`   |         | [`truce-rack-au3`](crates/truce-rack-au3)               | Apple          |
-| `lv2`   |         | [`truce-rack-lv2`](crates/truce-rack-lv2) (needs system `lilv-0`)      | all            |
+| Feature | Default | Crate it enables                                                       | Platforms      | System library                  |
+| ------- | ------- | ---------------------------------------------------------------------- | -------------- | ------------------------------- |
+| `clap`  | ✓       | [`truce-rack-clap`](crates/truce-rack-clap)             | all            | none (CLAP header is vendored)  |
+| `vst3`  | ✓       | [`truce-rack-vst3`](crates/truce-rack-vst3)             | all            | none (pure-Rust `vst3` crate)   |
+| `au`    |         | [`truce-rack-au`](crates/truce-rack-au)                 | Apple          | system AU frameworks            |
+| `au3`   |         | [`truce-rack-au3`](crates/truce-rack-au3)               | Apple          | system AU frameworks            |
+| `lv2`   |         | [`truce-rack-lv2`](crates/truce-rack-lv2)               | all            | `lilv-0` (see below)            |
 
-For a pin-by-pin granular dependency tree (e.g. you only ever
-want CLAP and don't care about an umbrella crate's resolver
-churn), depend on the per-format crates directly instead.
+For a granular dependency tree (e.g. you only ever want CLAP and
+don't care about an umbrella crate's resolver churn), depend on
+the per-format crates directly instead.
 
 ## Format coverage
 
@@ -80,17 +80,89 @@ are queried at open and driven by the host. Toolkit-specific UI
 classes (`Gtk*UI`, `Qt*UI`) would still need a `suil`-style
 wrapper — that's the only remaining gap.
 
+## Building from source
+
+Rust stable (1.75 or newer) via [rustup](https://rustup.rs), plus
+a C toolchain (clang on macOS, gcc on Linux, MSVC on Windows).
+Below covers the system libraries each format needs.
+
+### macOS
+
+```bash
+xcode-select --install         # clang + AU frameworks
+brew install lilv              # only if you want LV2
+cargo build
+```
+
+Apple Silicon Homebrew installs `lilv` to `/opt/homebrew/opt/lilv`;
+Intel Homebrew to `/usr/local/opt/lilv`. `truce-rack-lv2/build.rs`
+adds both to the linker search path.
+
+### Linux (Debian / Ubuntu)
+
+```bash
+sudo apt install build-essential pkg-config \
+    libasound2-dev \
+    liblilv-dev    # only if you want LV2
+cargo build
+```
+
+- `libasound2-dev` — ALSA, pulled in by cpal (audio out) and
+  midir (MIDI in).
+- `liblilv-dev` — LV2 host library. The error
+  `rust-lld: error: unable to find library -llilv-0` means it's
+  missing.
+
+The `gui` feature on `truce-rack-standalone` is gated off on
+Linux (baseview's Linux backend drags `wayland-sys`); the
+headless path works. To skip LV2 entirely:
+
+```bash
+cargo build -p truce-rack-standalone --no-default-features --features clap
+```
+
+**Fedora / RHEL:**
+
+```bash
+sudo dnf install alsa-lib-devel lilv-devel
+```
+
+**Arch:**
+
+```bash
+sudo pacman -S alsa-lib lilv
+```
+
+### Windows
+
+WASAPI (audio) and WinMM (MIDI) come from the system — no extra
+install. Only LV2 needs a system library.
+
+```powershell
+git clone https://github.com/microsoft/vcpkg
+.\vcpkg\bootstrap-vcpkg.bat
+.\vcpkg\vcpkg install lilv:x64-windows
+$env:LIB = "$PWD\vcpkg\installed\x64-windows\lib;$env:LIB"
+cargo build
+```
+
+To skip LV2:
+
+```powershell
+cargo build -p truce-rack-standalone --no-default-features --features clap,vst3
+```
+
 ## Try it standalone
 
 [`truce-rack-standalone`](crates/truce-rack-standalone) is the
-reference host: scan every enabled format, load one plugin by id
-or name, drive it through cpal, and (with `--gui`) embed its
-editor in a baseview window. Hardware MIDI input is always on
-(CoreMIDI / WinMM / ALSA via midir).
+reference host: scans every enabled format, loads one plugin by
+id or name, drives it through cpal, and (with `--gui`) embeds
+its editor in a baseview window. Hardware MIDI input is always
+on (CoreMIDI / WinMM / ALSA via midir).
 
 ```bash
 # List every plugin every enabled scanner can find.
-cargo run -p truce-rack-standalone --features "gui,vst3,au,au3" -- --list
+cargo run -p truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
 
 # Load one and play it from a MIDI controller + the QWERTY
 # keyboard inside the editor window.
@@ -102,8 +174,9 @@ cargo run -p truce-rack-standalone --features "au" -- \
     --format au --name "AUMIDISynth" --seconds 5
 ```
 
-Linux gates `gui` off (baseview drags `wayland-sys`); the
-headless path works there.
+On macOS add `gui`, `au`, `au3` to the feature list to embed the
+plugin's editor and scan AU plugins. On Linux `gui` is gated off
+(see above); the headless path works.
 
 ## Workspace layout
 
@@ -133,6 +206,19 @@ truce-rack/
 | [`truce-rack-lv2`](crates/truce-rack-lv2) | [![crates.io](https://img.shields.io/crates/v/truce-rack-lv2.svg)](https://crates.io/crates/truce-rack-lv2) | [![docs.rs](https://docs.rs/truce-rack-lv2/badge.svg)](https://docs.rs/truce-rack-lv2) |
 | [`truce-rack-standalone`](crates/truce-rack-standalone) | [![crates.io](https://img.shields.io/crates/v/truce-rack-standalone.svg)](https://crates.io/crates/truce-rack-standalone) | [![docs.rs](https://docs.rs/truce-rack-standalone/badge.svg)](https://docs.rs/truce-rack-standalone) |
 | [`truce-rack-test`](crates/truce-rack-test) | [![crates.io](https://img.shields.io/crates/v/truce-rack-test.svg)](https://crates.io/crates/truce-rack-test) | [![docs.rs](https://docs.rs/truce-rack-test/badge.svg)](https://docs.rs/truce-rack-test) |
+
+## Troubleshooting
+
+- **`unable to find library -llilv-0`** — install the LV2 host
+  library: `liblilv-dev` (Debian/Ubuntu), `lilv-devel`
+  (Fedora/RHEL), `lilv` (Arch), `brew install lilv` (macOS),
+  `vcpkg install lilv` (Windows). Or skip LV2 with
+  `--no-default-features --features clap,vst3`.
+- **`ALSA lib ... cannot find card`** on Linux — no audio device
+  is selected. Pass `--seconds N` to run without opening one, or
+  check `aplay -l`.
+- **`error: linker 'cc' not found`** — install your platform's C
+  toolchain (Xcode CLT, `build-essential`, MSVC Build Tools).
 
 ## License
 
