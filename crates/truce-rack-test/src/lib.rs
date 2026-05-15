@@ -10,17 +10,16 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```ignore
 //! use truce_rack_core::scanner::PluginScanner;
 //! use truce_rack_test::{render_silence, assert_no_nans};
 //!
-//! # struct MyScanner;
-//! # impl PluginScanner for MyScanner {
-//! #   type Plugin = truce_rack_core::plugin::PluginCore; // placeholder
-//! #   fn scan(&self) -> truce_rack_core::Result<Vec<truce_rack_core::PluginInfo>> { unimplemented!() }
-//! #   fn scan_path(&self, _: &std::path::Path) -> truce_rack_core::Result<Vec<truce_rack_core::PluginInfo>> { unimplemented!() }
-//! #   fn load(&self, _: &truce_rack_core::PluginInfo) -> truce_rack_core::Result<Self::Plugin> { unimplemented!() }
-//! # }
+//! let scanner = MyScanner::new();
+//! for info in scanner.scan()? {
+//!     let mut plugin = scanner.load(&info)?;
+//!     let rendered = render_silence(&mut plugin, 48_000.0, 1024)?;
+//!     assert_no_nans(&rendered);
+//! }
 //! ```
 
 use truce_rack_core::buffer::{AudioBuffer, BusRange};
