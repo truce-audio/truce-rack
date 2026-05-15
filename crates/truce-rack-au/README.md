@@ -19,8 +19,8 @@ format-agnostic [`truce-rack-core`][core] traits.
 
 ```toml
 [target.'cfg(target_vendor = "apple")'.dependencies]
-truce-rack-core = "0.9"
-truce-rack-au = "0.9"
+truce-rack-core = "1.0"
+truce-rack-au = "1.0"
 ```
 
 ```rust

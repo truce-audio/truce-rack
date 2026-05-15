@@ -18,8 +18,8 @@ audio + MIDI + editor surface is identical to AUv2.
 
 ```toml
 [target.'cfg(target_vendor = "apple")'.dependencies]
-truce-rack-core = "0.9"
-truce-rack-au3 = "0.9"
+truce-rack-core = "1.0"
+truce-rack-au3 = "1.0"
 ```
 
 ```rust

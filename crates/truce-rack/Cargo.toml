@@ -1,0 +1,36 @@
+[package]
+name = "truce-rack"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Cross-format audio plugin host (CLAP + VST3 by default; AU, AU3, LV2 behind features)"
+readme = "README.md"
+
+[dependencies]
+truce-rack-core = { workspace = true }
+truce-rack-clap = { workspace = true, optional = true }
+truce-rack-vst3 = { workspace = true, optional = true }
+truce-rack-lv2 = { workspace = true, optional = true }
+
+# Apple-only crates are gated both by feature AND by target so a
+# Linux build with `--features au` doesn't fail trying to compile
+# the Cocoa-only wrapper.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+truce-rack-au = { workspace = true, optional = true }
+truce-rack-au3 = { workspace = true, optional = true }
+
+[features]
+# CLAP + VST3 are the cross-platform mainstream formats and ship
+# enabled by default. Apple AU and Linux LV2 are platform-specific
+# enough that we make them opt-in.
+default = ["clap", "vst3"]
+clap = ["dep:truce-rack-clap"]
+vst3 = ["dep:truce-rack-vst3"]
+au = ["dep:truce-rack-au"]
+au3 = ["dep:truce-rack-au3"]
+lv2 = ["dep:truce-rack-lv2"]
+
+[lints]
+workspace = true

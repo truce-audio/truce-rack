@@ -27,8 +27,8 @@ Per-format wrappers all live in the same workspace:
 
 ```toml
 [dependencies]
-truce-rack-core = "0.9"
-truce-rack-clap = "0.9"   # add one wrapper per format you need
+truce-rack-core = "1.0"
+truce-rack-clap = "1.0"   # add one wrapper per format you need
 ```
 
 ```rust

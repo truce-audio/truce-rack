@@ -17,8 +17,8 @@ format-agnostic [`truce-rack-core`][core] traits.
 
 ```toml
 [dependencies]
-truce-rack-core = "0.9"
-truce-rack-vst3 = "0.9"
+truce-rack-core = "1.0"
+truce-rack-vst3 = "1.0"
 ```
 
 ```rust

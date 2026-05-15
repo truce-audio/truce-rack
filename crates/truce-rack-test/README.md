@@ -16,8 +16,8 @@ exercise a [`PluginScanner`][core] impl across a corpus.
 
 ```toml
 [dev-dependencies]
-truce-rack-core = "0.9"
-truce-rack-test = "0.9"
+truce-rack-core = "1.0"
+truce-rack-test = "1.0"
 ```
 
 ```rust

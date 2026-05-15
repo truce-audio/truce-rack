@@ -46,7 +46,8 @@ for arg in "$@"; do
 done
 
 # Topological dependency order. core has no internal deps; au3
-# depends on au; standalone depends on every wrapper.
+# depends on au; standalone + the truce-rack umbrella both depend
+# on every wrapper, so they go last.
 CRATES=(
     truce-rack-core
     truce-rack-clap
@@ -56,6 +57,7 @@ CRATES=(
     truce-rack-test
     truce-rack-au3
     truce-rack-standalone
+    truce-rack
 )
 
 VERSION=$(awk '

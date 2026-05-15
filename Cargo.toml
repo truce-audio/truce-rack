@@ -5,6 +5,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/truce-rack",
     "crates/truce-rack-core",
     "crates/truce-rack-clap",
     "crates/truce-rack-vst3",
@@ -26,6 +27,7 @@ rust-version = "1.90"
 # `path` is used for in-workspace builds; `version` is what the
 # published crate references on crates.io. `cargo publish` requires
 # a non-path requirement for downstream resolution.
+truce-rack = { path = "crates/truce-rack", version = "1.0.1" }
 truce-rack-core = { path = "crates/truce-rack-core", version = "1.0.1" }
 truce-rack-clap = { path = "crates/truce-rack-clap", version = "1.0.1" }
 truce-rack-vst3 = { path = "crates/truce-rack-vst3", version = "1.0.1" }

@@ -1340,6 +1340,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "truce-rack"
+version = "1.0.1"
+dependencies = [
+ "truce-rack-au",
+ "truce-rack-au3",
+ "truce-rack-clap",
+ "truce-rack-core",
+ "truce-rack-lv2",
+ "truce-rack-vst3",
+]
+
+[[package]]
 name = "truce-rack-au"
 version = "1.0.1"
 dependencies = [

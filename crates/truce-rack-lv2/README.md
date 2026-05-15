@@ -26,8 +26,8 @@ Without it, `cargo build -p truce-rack-lv2` fails at link time.
 
 ```toml
 [dependencies]
-truce-rack-core = "0.9"
-truce-rack-lv2 = "0.9"
+truce-rack-core = "1.0"
+truce-rack-lv2 = "1.0"
 ```
 
 ```rust
