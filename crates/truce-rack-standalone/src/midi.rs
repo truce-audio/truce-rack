@@ -6,8 +6,8 @@
 //! hardware notes flow into the plugin alongside QWERTY-keyboard
 //! notes from the windowed handler with no extra wiring.
 //!
-//! Cross-platform via midir's three backends: CoreMIDI on macOS,
-//! WinMM on Windows, ALSA on Linux.
+//! Cross-platform via midir's three backends: `CoreMIDI` on macOS,
+//! `WinMM` on Windows, ALSA on Linux.
 
 use midir::{MidiInput, MidiInputConnection, MidiInputPort};
 
@@ -141,6 +141,10 @@ fn parse_midi(bytes: &[u8]) -> Option<EventBody> {
         _ if bytes.len() <= 8 => {
             let mut data = [0u8; 8];
             data[..bytes.len()].copy_from_slice(bytes);
+            // The arm guard caps `bytes.len()` at 8, so the cast is
+            // lossless. `try_from` would force an unwrap that's
+            // dead code by construction.
+            #[allow(clippy::cast_possible_truncation)]
             MidiData::Raw {
                 len: bytes.len() as u8,
                 data,

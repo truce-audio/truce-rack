@@ -12,11 +12,14 @@ workspace of small per-format wrapper crates that talk to native
 plugin APIs through pure Rust bindings (`objc2`, `clap-sys`,
 `vst3`, `lilv-sys`).
 
-The workspace shape mirrors the
+The workspace shape was inspired by the
 [truce](https://github.com/truce-audio/truce) plugin-building
-framework on the host side — one trait in a no-FFI core crate
-(`truce-rack-core`), one wrapper crate per format that loads, scans,
-and adapts plugins of that format into that trait.
+framework — one trait in a no-FFI core crate (`truce-rack-core`),
+one wrapper crate per format that loads, scans, and adapts plugins
+into that trait. **`truce-rack` doesn't depend on `truce`** and
+isn't a runtime extension of it — it's a standalone host library
+that hosts plugins of any format (truce-built or otherwise). The
+shared name is naming-convention only.
 
 ## Workspace layout
 

@@ -1208,7 +1208,9 @@ mod tests {
     fn char8_skips_trailing_nul() {
         let mut arr = [0i8; 16];
         for (i, &b) in b"Hello".iter().enumerate() {
-            arr[i] = b as i8;
+            // ASCII byte → i8 always fits losslessly; the cast is
+            // bit-pattern-identical for `b` < 128.
+            arr[i] = i8::try_from(b).expect("ASCII byte fits in i8");
         }
         assert_eq!(char8_array_to_string(&arr), "Hello");
     }

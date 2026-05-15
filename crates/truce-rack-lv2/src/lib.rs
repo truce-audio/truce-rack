@@ -291,7 +291,7 @@ unsafe fn has_native_ui(plugin: *const lilv_sys::LilvPlugin) -> bool {
 /// internally but doesn't expose it directly; we cheat by stashing
 /// it into a thread-local during `collect_plugin_infos`.
 unsafe fn lilv_plugin_world(_plugin: *const lilv_sys::LilvPlugin) -> *mut lilv_sys::LilvWorld {
-    SCAN_WORLD.with(|w| w.get())
+    SCAN_WORLD.with(std::cell::Cell::get)
 }
 
 thread_local! {
@@ -448,7 +448,7 @@ struct UiFeatureStorage {
     /// host through the same map.
     map_struct: LV2UridMap,
     /// `ui#parent` feature. `data` is a raw pointer to the parent
-    /// widget (NSView* / HWND / X11 Window).
+    /// widget (`NSView`* / HWND / X11 Window).
     parent_feature_data: *mut c_void,
     feature_storage: Vec<LV2Feature>,
     feature_ptrs: Vec<*const LV2Feature>,
@@ -457,7 +457,10 @@ struct UiFeatureStorage {
 /// Heap-allocated controller passed back to the UI as the opaque
 /// `controller` argument of `instantiate` and `write_function`. The
 /// UI hands the same pointer back unchanged; we cast it to
-/// `&Controller` to route the write into our control_values vec.
+/// `&Controller` to route the write into our `control_values` vec.
+// Field names share the `control_` prefix because they all describe
+// the control-port shuttle — the prefix is meaningful, not noise.
+#[allow(clippy::struct_field_names)]
 struct Controller {
     /// Pointer to the head of `Lv2Plugin::control_values`. Stable
     /// for the lifetime of the plugin (we never reallocate after
@@ -507,6 +510,10 @@ extern "C" fn ui_write_callback(
 }
 
 impl UiFeatureStorage {
+    // The `Box` return is load-bearing: the caller stores raw
+    // pointers into this struct's interior fields, so the heap
+    // allocation must outlive `Lv2Plugin` moves.
+    #[allow(clippy::unnecessary_box_returns)]
     fn new(map_handle: *mut UridMap, parent: *mut c_void) -> Box<Self> {
         let mut boxed = Box::new(UiFeatureStorage {
             map_struct: LV2UridMap {
@@ -1146,6 +1153,10 @@ impl PluginCore for Lv2Plugin {
 }
 
 impl PluginEditor for Lv2Plugin {
+    // `type DescFn = …` lives in the function body next to its single
+    // call site so the LV2 UI signature is one read away — hoisting it
+    // would orphan the comment from the use.
+    #[allow(clippy::items_after_statements)]
     fn open(&mut self, parent: WindowHandle, _scale: f64) -> Result<()> {
         let bundle = self
             .ui_bundle
@@ -1218,8 +1229,7 @@ impl PluginEditor for Lv2Plugin {
         let controller_ptr: *const Controller = self
             .controller
             .as_deref()
-            .map(|c| c as *const Controller)
-            .unwrap_or(std::ptr::null());
+            .map_or(std::ptr::null(), |c| c as *const Controller);
 
         let plugin_uri = CString::new(self.info.unique_id.clone())
             .map_err(|_| Error::Other("lv2 plugin uri contains NUL".into()))?;
@@ -1310,6 +1320,9 @@ fn native_widget_size(widget: LV2UIWidget) -> Option<(u32, u32)> {
     // promises the widget stays valid until cleanup.
     let view = widget as *mut objc2::runtime::AnyObject;
     let frame: NSRect = unsafe { msg_send![view, frame] };
+    // `.max(0.0)` clamps the negative branch the sign-loss lint
+    // worries about; window dimensions can't reasonably overflow u32.
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     Some((
         frame.size.width.max(0.0) as u32,
         frame.size.height.max(0.0) as u32,

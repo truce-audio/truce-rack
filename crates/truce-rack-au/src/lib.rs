@@ -17,7 +17,7 @@
 //! - **MIDI** via `MusicDeviceMIDIEvent`. Routes channel-voice
 //!   messages with sample-accurate offsets; raw bytes pass through
 //!   the same call. Non-MIDI-accepting effects no-op silently.
-//! - **Editor** via the AUv2 Cocoa view (`kAudioUnitProperty_CocoaUI`).
+//! - **Editor** via the `AUv2` Cocoa view (`kAudioUnitProperty_CocoaUI`).
 //!
 //! AU v3 plugins that set `kAudioComponentFlag_RequiresAsyncInstantiation`
 //! still need the async path and are not yet loadable through this
