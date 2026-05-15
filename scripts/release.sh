@@ -145,6 +145,24 @@ already_published() {
     [[ "$code" == "200" ]]
 }
 
+# Sleep until the timestamp in a crates.io 429 message ("try
+# again after Fri, 15 May 2026 08:03:00 GMT"), plus a 30s buffer
+# for clock skew. Returns non-zero if the date can't be parsed.
+wait_until_after() {
+    local retry_at="$1"
+    local now wait_until sleep_secs
+    now=$(date -u +%s)
+    if [[ "$(uname)" == "Darwin" ]]; then
+        wait_until=$(date -j -u -f '%a, %d %b %Y %H:%M:%S GMT' "$retry_at" +%s 2>/dev/null) || return 1
+    else
+        wait_until=$(date -u -d "$retry_at" +%s 2>/dev/null) || return 1
+    fi
+    sleep_secs=$(( wait_until - now + 30 ))
+    (( sleep_secs > 0 )) || sleep_secs=30
+    echo "==> rate-limited until $retry_at; sleeping ${sleep_secs}s"
+    sleep "$sleep_secs"
+}
+
 publish_crate() {
     local crate="$1"
     if (( DRY_RUN )); then
@@ -156,15 +174,38 @@ publish_crate() {
         echo "==> $crate $VERSION already on crates.io; skipping"
         return
     fi
-    echo "==> cargo publish -p $crate"
-    # `--no-verify` is intentionally NOT passed — we want each
-    # crate to compile in isolation against published deps.
-    cargo publish -p "$crate"
-    # Give crates.io's index a moment to propagate so the next
-    # crate's dep resolution sees this version. 10s is overkill
-    # for the index but cheap insurance against a transient
-    # 'no matching package' error on the next publish.
-    sleep 10
+
+    # Try up to 4 times: any 429 sleeps until the retry-after
+    # timestamp + 30s, then loops. Other errors propagate
+    # immediately. `--no-verify` is intentionally NOT passed —
+    # we want each crate to compile in isolation against
+    # already-published deps.
+    local attempt out rc retry_at
+    for attempt in 1 2 3 4; do
+        out=$(mktemp)
+        echo "==> cargo publish -p $crate (attempt $attempt)"
+        cargo publish -p "$crate" 2>&1 | tee "$out"
+        rc=${PIPESTATUS[0]}
+        if (( rc == 0 )); then
+            rm -f "$out"
+            # Index-propagation insurance — see banner above.
+            sleep 10
+            return 0
+        fi
+        retry_at=$(grep -oE 'try again after [A-Za-z]+, [0-9]+ [A-Za-z]+ [0-9]+ [0-9:]+ GMT' "$out" \
+            | sed 's/^try again after //' | head -n1)
+        rm -f "$out"
+        if [[ -z "$retry_at" ]]; then
+            echo "==> $crate publish failed (rc=$rc); not a rate-limit error" >&2
+            return $rc
+        fi
+        wait_until_after "$retry_at" || {
+            echo "==> failed to parse retry-after date '$retry_at'" >&2
+            return 1
+        }
+    done
+    echo "==> $crate publish gave up after 4 attempts" >&2
+    return 1
 }
 
 if (( SKIP_PUBLISH )); then
