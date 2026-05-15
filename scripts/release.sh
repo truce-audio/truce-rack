@@ -93,9 +93,13 @@ if [[ -n "$PIN_MISMATCH" ]]; then
     exit 1
 fi
 
-if [[ -n "$(git status --porcelain)" ]]; then
-    echo "working tree is dirty — commit or stash first." >&2
-    git status --short >&2
+# Tracked-file changes block the release; untracked files (?? lines)
+# are fine — local notes, build artefacts, license files not yet
+# checked in, etc. don't affect what's about to be published.
+TRACKED_DIRTY=$(git status --porcelain | grep -v '^??' || true)
+if [[ -n "$TRACKED_DIRTY" ]]; then
+    echo "tracked-file changes — commit or stash first." >&2
+    echo "$TRACKED_DIRTY" >&2
     exit 1
 fi
 
