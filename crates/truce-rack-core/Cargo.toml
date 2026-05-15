@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Core traits and types for the truce-rack audio-plugin host framework"
+readme = "README.md"
 
 [dependencies]
 bitflags = { workspace = true }

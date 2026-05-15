@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "VST3 host implementation for the truce-rack audio-plugin framework"
+readme = "README.md"
 
 [dependencies]
 truce-rack-core = { workspace = true }

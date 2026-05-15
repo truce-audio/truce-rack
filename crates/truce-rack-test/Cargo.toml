@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Assertion helpers for truce-rack host implementations (load, render, state, params)"
+readme = "README.md"
 
 [dependencies]
 truce-rack-core = { workspace = true }

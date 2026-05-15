@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "cpal-driven standalone host for truce-rack (one plugin in, audio device out)"
+readme = "README.md"
 
 [dependencies]
 truce-rack-core = { workspace = true }
