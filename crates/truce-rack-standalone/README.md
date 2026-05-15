@@ -1,5 +1,8 @@
 # truce-rack-standalone
 
+[![crates.io](https://img.shields.io/crates/v/truce-rack-standalone.svg)](https://crates.io/crates/truce-rack-standalone)
+[![docs.rs](https://docs.rs/truce-rack-standalone/badge.svg)](https://docs.rs/truce-rack-standalone)
+
 Reference standalone host for the [**truce-rack**][repo] audio
 plugin framework. cpal for the audio device, `midir` for hardware
 MIDI input, optional baseview window with the plugin's editor

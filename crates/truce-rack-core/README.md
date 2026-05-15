@@ -1,5 +1,8 @@
 # truce-rack-core
 
+[![crates.io](https://img.shields.io/crates/v/truce-rack-core.svg)](https://crates.io/crates/truce-rack-core)
+[![docs.rs](https://docs.rs/truce-rack-core/badge.svg)](https://docs.rs/truce-rack-core)
+
 Core traits and types for the [**truce-rack**][repo] audio plugin
 host framework. Defines the format-agnostic `PluginScanner`,
 `PluginCore`, `Plugin<S>`, and `PluginEditor` trait surface every

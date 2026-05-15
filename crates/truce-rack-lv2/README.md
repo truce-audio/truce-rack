@@ -1,5 +1,8 @@
 # truce-rack-lv2
 
+[![crates.io](https://img.shields.io/crates/v/truce-rack-lv2.svg)](https://crates.io/crates/truce-rack-lv2)
+[![docs.rs](https://docs.rs/truce-rack-lv2/badge.svg)](https://docs.rs/truce-rack-lv2)
+
 LV2 host implementation for the [**truce-rack**][repo] audio
 plugin framework. Built on `lilv-sys` (host-side LV2 discovery /
 state library). Implements scan, load, audio + MIDI atom-sequence
