@@ -1,7 +1,7 @@
 # truce-rack-au3
 
 [![crates.io](https://img.shields.io/crates/v/truce-rack-au3.svg)](https://crates.io/crates/truce-rack-au3)
-[docs.rs](https://docs.rs/truce-rack-au3)
+[![docs.rs](https://img.shields.io/badge/docs.rs-blue)](https://docs.rs/truce-rack-au3)
 
 Audio Unit v3 (App Extension) host implementation for the
 [**truce-rack**][repo] audio plugin framework. Apple-only. Filters

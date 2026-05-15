@@ -1,7 +1,7 @@
 # truce-rack-vst3
 
 [![crates.io](https://img.shields.io/crates/v/truce-rack-vst3.svg)](https://crates.io/crates/truce-rack-vst3)
-[docs.rs](https://docs.rs/truce-rack-vst3)
+[![docs.rs](https://img.shields.io/badge/docs.rs-blue)](https://docs.rs/truce-rack-vst3)
 
 VST3 host implementation for the [**truce-rack**][repo] audio
 plugin framework. Built on the community [`vst3`][vst3] crate —

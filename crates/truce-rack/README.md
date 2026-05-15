@@ -1,7 +1,7 @@
 # truce-rack
 
 [![crates.io](https://img.shields.io/crates/v/truce-rack.svg)](https://crates.io/crates/truce-rack)
-[docs.rs](https://docs.rs/truce-rack)
+[![docs.rs](https://img.shields.io/badge/docs.rs-blue)](https://docs.rs/truce-rack)
 
 Cross-format audio plugin host. Umbrella crate for the
 [**truce-rack**][repo] workspace — re-exports the per-format

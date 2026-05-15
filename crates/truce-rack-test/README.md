@@ -1,7 +1,7 @@
 # truce-rack-test
 
 [![crates.io](https://img.shields.io/crates/v/truce-rack-test.svg)](https://crates.io/crates/truce-rack-test)
-[docs.rs](https://docs.rs/truce-rack-test)
+[![docs.rs](https://img.shields.io/badge/docs.rs-blue)](https://docs.rs/truce-rack-test)
 
 Assertion helpers for [**truce-rack**][repo] host integration
 tests — render N frames of silence (or a generated input) through
