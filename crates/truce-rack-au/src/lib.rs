@@ -1241,8 +1241,59 @@ unsafe fn set_hidden(view: &objc2_app_kit::NSView, hidden: bool) {
 unsafe fn view_frame(view: &objc2_app_kit::NSView) -> (f64, f64, f64, f64) {
     use objc2::msg_send;
     use objc2_foundation::NSRect;
+
+    // Force any pending Auto Layout pass so the descendant frames
+    // we're about to walk are post-layout. Apple's stock AUv2 views
+    // (AULowpass, AUMultibandCompressor, …) only finalize their
+    // child-view positions on the first layout pass.
+    let _: () = unsafe { msg_send![view, layoutSubtreeIfNeeded] };
+
     let r: NSRect = unsafe { msg_send![view, frame] };
-    (r.origin.x, r.origin.y, r.size.width, r.size.height)
+
+    // AUGenericView and friends report a `frame` that's smaller
+    // than the union of their descendant subviews — macOS doesn't
+    // clip children to a parent's bounds by default, so the visible
+    // UI extends past the parent's frame. Walk the subtree and use
+    // the bounding box of every descendant frame as the real
+    // preferred size.
+    let (extent_w, extent_h) = unsafe { subtree_extent(view) };
+    let w = extent_w.max(r.size.width);
+    let h = extent_h.max(r.size.height);
+    (r.origin.x, r.origin.y, w, h)
+}
+
+/// Recursively walk `view`'s subviews, computing the bounding box
+/// (in `view`'s coordinate system) of every descendant's frame.
+/// Returns `(max_x, max_y)` — i.e. the max width/height the view
+/// would need so no descendant overflows.
+unsafe fn subtree_extent(view: &objc2_app_kit::NSView) -> (f64, f64) {
+    use objc2::msg_send;
+    use objc2_foundation::{NSArray, NSRect};
+
+    let subviews: *mut NSArray<objc2_app_kit::NSView> =
+        unsafe { msg_send![view, subviews] };
+    if subviews.is_null() {
+        return (0.0, 0.0);
+    }
+    let count: usize = unsafe { msg_send![subviews, count] };
+    let mut max_x = 0.0_f64;
+    let mut max_y = 0.0_f64;
+    for i in 0..count {
+        let sub: *mut objc2_app_kit::NSView =
+            unsafe { msg_send![subviews, objectAtIndex: i] };
+        if sub.is_null() {
+            continue;
+        }
+        let frame: NSRect = unsafe { msg_send![sub, frame] };
+        max_x = max_x.max(frame.origin.x + frame.size.width);
+        max_y = max_y.max(frame.origin.y + frame.size.height);
+        // Recurse into the descendant, translating its extent into
+        // `view`'s coordinate space.
+        let (sub_w, sub_h) = unsafe { subtree_extent(&*sub) };
+        max_x = max_x.max(frame.origin.x + sub_w);
+        max_y = max_y.max(frame.origin.y + sub_h);
+    }
+    (max_x, max_y)
 }
 
 unsafe fn set_view_frame(view: &objc2_app_kit::NSView, w: f64, h: f64) {

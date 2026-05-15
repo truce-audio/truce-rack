@@ -130,6 +130,16 @@ where
         }
         if let Some((w, h)) = editor_size {
             window.resize(Size::new(f64::from(w), f64::from(h)));
+            // The plugin's view stays at the position / size it was
+            // added to the (still INITIAL_WINDOW-sized) parent. After
+            // the parent resizes, push the view's frame back to
+            // (0, 0, w, h) so it fills the new bounds — otherwise
+            // shrunk parents leave the view in its old corner with
+            // empty space, and grown parents leave the view too small.
+            let mut guard = plugin_for_handler.lock().expect("plugin mutex");
+            if let Some(editor) = guard.editor() {
+                editor.set_size(w, h);
+            }
         }
 
         StandaloneHandler {
