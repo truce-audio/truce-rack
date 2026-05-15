@@ -93,7 +93,7 @@ where
     let _midi_in = crate::midi::MidiInputThread::start();
 
     let window_opts = WindowOpenOptions {
-        title: format!("{plugin_name} — truce-rack-standalone"),
+        title: plugin_name.to_string(),
         size: Size::new(f64::from(initial_size.0), f64::from(initial_size.1)),
         scale: WindowScalePolicy::SystemScaleFactor,
     };
