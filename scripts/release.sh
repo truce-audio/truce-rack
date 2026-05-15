@@ -75,10 +75,15 @@ echo "==> truce-rack release $TAG"
 PIN_MISMATCH=$(awk -v want="$VERSION" '
     /^\[workspace\.dependencies\]/ { in_deps = 1; next }
     /^\[/                          { in_deps = 0 }
-    in_deps && /^truce-rack-/ {
-        if (match($0, /version = "([^"]+)"/, m) && m[1] != want) {
-            print $1, "= " m[1]
-        }
+    in_deps && /^truce-rack-/ && /version[[:space:]]*=[[:space:]]*"/ {
+        # Portable POSIX-awk capture: strip everything up through
+        # the opening quote of the version string, then everything
+        # from the closing quote on. BSD awk on macOS lacks the
+        # gawk-only 3-arg form of match().
+        v = $0
+        sub(/.*version[[:space:]]*=[[:space:]]*"/, "", v)
+        sub(/".*/, "", v)
+        if (v != want) print $1, "=", v
     }
 ' Cargo.toml)
 if [[ -n "$PIN_MISMATCH" ]]; then
