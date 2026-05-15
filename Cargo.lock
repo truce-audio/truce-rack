@@ -1341,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-au"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "block2",
  "objc2",
@@ -1356,7 +1356,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-au3"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "objc2",
  "objc2-audio-toolbox",
@@ -1369,7 +1369,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-clap"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "clap-sys",
  "libloading",
@@ -1379,7 +1379,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "bitflags 2.11.1",
  "crossbeam-queue",
@@ -1389,7 +1389,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-lv2"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "libc",
  "libloading",
@@ -1403,7 +1403,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-standalone"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "baseview",
  "cpal",
@@ -1426,14 +1426,14 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-test"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "truce-rack-core",
 ]
 
 [[package]]
 name = "truce-rack-vst3"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "libloading",
  "thiserror 2.0.18",
