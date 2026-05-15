@@ -1,0 +1,81 @@
+[package]
+name = "truce-rack-standalone"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "cpal-driven standalone host for truce-rack (one plugin in, audio device out)"
+
+[dependencies]
+truce-rack-core = { workspace = true }
+truce-rack-clap = { workspace = true }
+thiserror = { workspace = true }
+cpal = "0.15"
+pico-args = "0.5"
+dirs = "5"
+# Hardware MIDI input — CoreMIDI on macOS, WinMM on Windows, ALSA on Linux.
+midir = { workspace = true }
+
+# Optional per-format wrappers — pulled in when the matching
+# feature is enabled. Keeping each wrapper behind a feature means
+# a Linux user can build `truce-rack-standalone --features clap` without
+# pulling AU / VST3.
+truce-rack-vst3 = { workspace = true, optional = true }
+truce-rack-lv2 = { workspace = true, optional = true }
+
+# `gui` feature deps. baseview pulled from crates.io (NOT the truce
+# fork) — we target macOS / Windows here; Linux gates the feature off
+# since baseview's Linux backend drags wayland-sys onto the dev box.
+baseview = { version = "0.1", optional = true }
+raw-window-handle = { version = "0.5", optional = true }
+keyboard-types = { version = "0.6", optional = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+truce-rack-au = { workspace = true, optional = true }
+truce-rack-au3 = { workspace = true, optional = true }
+# Hand-rolled `objc2` runtime calls drive both the optional macOS menu
+# bar (gui feature) and the always-on screenshot capture path.
+# Non-optional + macOS-only — objc2 is already in the workspace dep
+# tree (truce-rack-au / truce-rack-au3) so no fresh compile cost.
+objc2 = { workspace = true }
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSView",
+    "NSBitmapImageRep",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+    "NSImageRep",
+] }
+objc2-foundation = { workspace = true, features = [
+    "NSString",
+    "NSData",
+    "NSDate",
+    "NSGeometry",
+    "NSRunLoop",
+] }
+
+[features]
+default = ["clap"]
+clap = []
+vst3 = ["dep:truce-rack-vst3"]
+au = ["dep:truce-rack-au"]
+au3 = ["dep:truce-rack-au3"]
+lv2 = ["dep:truce-rack-lv2"]
+gui = [
+    "dep:baseview",
+    "dep:raw-window-handle",
+    "dep:keyboard-types",
+]
+
+[[bin]]
+name = "truce-rack-standalone"
+path = "src/bin/truce-rack-standalone.rs"
+
+[[bin]]
+name = "truce-rack-screenshot"
+path = "src/bin/truce-rack-screenshot.rs"
+
+[lints]
+workspace = true

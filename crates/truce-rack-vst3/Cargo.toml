@@ -1,0 +1,17 @@
+[package]
+name = "truce-rack-vst3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "VST3 host implementation for the truce-rack audio-plugin framework"
+
+[dependencies]
+truce-rack-core = { workspace = true }
+thiserror = { workspace = true }
+libloading = { workspace = true }
+vst3 = { workspace = true }
+
+[lints]
+workspace = true

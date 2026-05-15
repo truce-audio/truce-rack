@@ -1,0 +1,29 @@
+[package]
+name = "truce-rack-lv2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "LV2 host implementation for the truce-rack audio-plugin framework"
+
+[dependencies]
+truce-rack-core = { workspace = true }
+thiserror = { workspace = true }
+lilv-sys = { workspace = true }
+# Layout-compatible LV2 C struct definitions (`LV2UridMap`,
+# `LV2Feature`, atom types). Same major as what lilv-sys pulls in.
+lv2_raw = "0.2"
+libc = "0.2"
+# Used to dlopen each LV2 UI bundle binary and resolve
+# `lv2ui_descriptor`. UIs are toolkit-agnostic ELF/Mach-O/DLL
+# blobs, so libloading is the lowest-friction Rust path.
+libloading = { workspace = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+# Reading the embedded LV2 CocoaUI's NSView frame.
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSGeometry"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,39 @@
+[package]
+name = "truce-rack-au"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "AU v2 host implementation for the truce-rack audio-plugin framework (Apple platforms)"
+
+[dependencies]
+truce-rack-core = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSGeometry"] }
+objc2-audio-toolbox = { version = "0.3", features = [
+    "AudioComponent",
+    "AUComponent",
+    "AudioUnit",
+    "AudioUnitProperties",
+    "AUCocoaUIView",
+    "MusicDevice",
+    "objc2-core-foundation",
+] }
+objc2-core-audio-types = { version = "0.3", features = ["CoreAudioBaseTypes"] }
+objc2-core-foundation = { version = "0.3", features = [
+    "CFBase",
+    "CFString",
+    "CFData",
+    "CFArray",
+    "CFError",
+    "CFPropertyList",
+    "CFURL",
+] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSResponder"] }
+
+[lints]
+workspace = true

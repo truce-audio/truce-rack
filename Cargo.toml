@@ -1,0 +1,64 @@
+# Workspace root for truce-rack — a per-format set of plugin-host
+# wrapper crates living under `crates/`. The legacy `rack` 0.4.x
+# package that used to share this directory has been deleted;
+# truce-rack is the only tree now.
+[workspace]
+resolver = "2"
+members = [
+    "crates/truce-rack-core",
+    "crates/truce-rack-clap",
+    "crates/truce-rack-vst3",
+    "crates/truce-rack-au",
+    "crates/truce-rack-au3",
+    "crates/truce-rack-lv2",
+    "crates/truce-rack-standalone",
+    "crates/truce-rack-test",
+]
+
+[workspace.package]
+version = "0.9.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/sinkingsugar/rack"
+rust-version = "1.90"
+
+[workspace.dependencies]
+truce-rack-core = { path = "crates/truce-rack-core" }
+truce-rack-clap = { path = "crates/truce-rack-clap" }
+truce-rack-vst3 = { path = "crates/truce-rack-vst3" }
+truce-rack-au = { path = "crates/truce-rack-au" }
+truce-rack-au3 = { path = "crates/truce-rack-au3" }
+truce-rack-lv2 = { path = "crates/truce-rack-lv2" }
+truce-rack-standalone = { path = "crates/truce-rack-standalone" }
+truce-rack-test = { path = "crates/truce-rack-test" }
+smallvec = "1.13"
+thiserror = "2.0"
+clap-sys = "0.5"
+bitflags = "2"
+crossbeam-queue = "0.3"
+libloading = "0.8"
+# VST3: the community Rust bindings used by truce, NIH-plug, et al.
+vst3 = "0.3"
+# AU v2 / v3: native bindings via objc2's audio-toolbox + core-audio
+# crates.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSArray"] }
+objc2-audio-toolbox = { version = "0.3", features = ["AudioComponent", "AudioUnitProperties"] }
+objc2-core-audio-types = "0.3"
+# LV2: lilv is the standard host-side library; lv2-sys gives raw FFI,
+# lilv-sys gives discovery + state.
+lilv-sys = "0.2"
+# Hardware MIDI input for the standalone host.
+midir = "0.10"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+[profile.dev]
+# Real-time audio glitches with the default unoptimized debug build —
+# even debug runs need at least -O1.
+opt-level = 2
+
+[profile.release]
+lto = true
+codegen-units = 1

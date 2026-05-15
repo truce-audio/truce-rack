@@ -1,0 +1,17 @@
+[package]
+name = "truce-rack-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Core traits and types for the truce-rack audio-plugin host framework"
+
+[dependencies]
+bitflags = { workspace = true }
+crossbeam-queue = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
