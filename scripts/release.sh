@@ -23,11 +23,17 @@ cd "$(dirname "$0")/.."
 DRY_RUN=0
 SKIP_PUBLISH=0
 SKIP_GITHUB=0
+RESUME=0
 for arg in "$@"; do
     case "$arg" in
         --dry-run)      DRY_RUN=1 ;;
         --skip-publish) SKIP_PUBLISH=1 ;;
         --skip-github)  SKIP_GITHUB=1 ;;
+        # Skip the build / test / clippy preflight. Use this when
+        # re-running after a crates.io 429 to pick up where the
+        # previous run was rate-limited; per-crate publish is
+        # already idempotent via the `already_published` check.
+        --resume)       RESUME=1 ;;
         -h|--help)
             sed -n '2,15p' "$0" | sed 's/^# //;s/^#//'
             exit 0
@@ -112,33 +118,53 @@ if (( ! DRY_RUN )) && git rev-parse "$TAG" >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "==> cargo build --workspace --release (sanity check)"
-cargo build --workspace --release
+if (( RESUME )); then
+    echo "==> --resume set, skipping build/test/clippy preflight"
+else
+    echo "==> cargo build --workspace --release (sanity check)"
+    cargo build --workspace --release
 
-echo "==> cargo test --workspace"
-cargo test --workspace --quiet
+    echo "==> cargo test --workspace"
+    cargo test --workspace --quiet
 
-echo "==> cargo clippy --workspace --all-targets -- -D warnings"
-cargo clippy --workspace --all-targets -- -D warnings
+    echo "==> cargo clippy --workspace --all-targets -- -D warnings"
+    cargo clippy --workspace --all-targets -- -D warnings
+fi
 
 # ----------------------------------------------------------------- crates.io
+# `true` iff `<crate>@<version>` is already on crates.io. Lets us
+# resume after a 429 (new-crate rate limit: ~1/10min for low-trust
+# publishers) without re-uploading anything that landed.
+already_published() {
+    local crate="$1"
+    local version="$2"
+    local code
+    code=$(curl -fsS -o /dev/null -w '%{http_code}' \
+        -A "truce-rack-release/$VERSION" \
+        "https://crates.io/api/v1/crates/$crate/$version" 2>/dev/null || echo "000")
+    [[ "$code" == "200" ]]
+}
+
 publish_crate() {
     local crate="$1"
-    local extra=""
     if (( DRY_RUN )); then
-        extra="--dry-run"
+        echo "==> cargo publish -p $crate --dry-run"
+        cargo publish -p "$crate" --dry-run
+        return
     fi
-    echo "==> cargo publish -p $crate $extra"
+    if already_published "$crate" "$VERSION"; then
+        echo "==> $crate $VERSION already on crates.io; skipping"
+        return
+    fi
+    echo "==> cargo publish -p $crate"
     # `--no-verify` is intentionally NOT passed — we want each
     # crate to compile in isolation against published deps.
-    cargo publish -p "$crate" $extra
-    if (( ! DRY_RUN )); then
-        # Give crates.io's index a moment to propagate so the next
-        # crate's dep resolution sees this version. 10s is overkill
-        # for the index but cheap insurance against a transient
-        # 'no matching package' error on the next publish.
-        sleep 10
-    fi
+    cargo publish -p "$crate"
+    # Give crates.io's index a moment to propagate so the next
+    # crate's dep resolution sees this version. 10s is overkill
+    # for the index but cheap insurance against a transient
+    # 'no matching package' error on the next publish.
+    sleep 10
 }
 
 if (( SKIP_PUBLISH )); then
