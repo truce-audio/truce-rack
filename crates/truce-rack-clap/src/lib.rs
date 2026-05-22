@@ -34,23 +34,23 @@ use clap_sys::events::{
     CLAP_EVENT_PARAM_VALUE, clap_event_header, clap_event_midi, clap_event_note,
     clap_event_param_value, clap_input_events, clap_output_events,
 };
+use clap_sys::ext::gui::{
+    CLAP_EXT_GUI, CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11,
+    clap_plugin_gui, clap_window, clap_window_handle,
+};
 use clap_sys::ext::params::{
     CLAP_EXT_PARAMS, CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_BYPASS, CLAP_PARAM_IS_ENUM,
     CLAP_PARAM_IS_HIDDEN, CLAP_PARAM_IS_READONLY, CLAP_PARAM_IS_STEPPED, clap_param_info,
     clap_plugin_params,
 };
-use clap_sys::ext::gui::{
-    CLAP_EXT_GUI, CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11, clap_plugin_gui,
-    clap_window, clap_window_handle,
-};
 use clap_sys::ext::state::{CLAP_EXT_STATE, clap_plugin_state};
-use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory};
 use clap_sys::plugin::{clap_plugin, clap_plugin_descriptor};
 use clap_sys::process::{
     CLAP_PROCESS_CONTINUE, CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, CLAP_PROCESS_ERROR,
     CLAP_PROCESS_SLEEP, CLAP_PROCESS_TAIL, clap_process,
 };
+use clap_sys::stream::{clap_istream, clap_ostream};
 
 use std::ffi::{CStr, CString, c_char};
 use std::path::{Path, PathBuf};
@@ -610,8 +610,8 @@ impl PluginCore for ClapPlugin {
         if self.params_ext.is_null() {
             return Err(Error::InvalidParameter(index));
         }
-        let get_info = unsafe { (*self.params_ext).get_info }
-            .ok_or(Error::InvalidParameter(index))?;
+        let get_info =
+            unsafe { (*self.params_ext).get_info }.ok_or(Error::InvalidParameter(index))?;
         let mut info = empty_param_info();
         let idx_u32 = u32::try_from(index).map_err(|_| Error::InvalidParameter(index))?;
         let ok = unsafe { get_info(self.plugin, idx_u32, &raw mut info) };
@@ -629,8 +629,8 @@ impl PluginCore for ClapPlugin {
         // for the current value. CLAP's params API is id-keyed,
         // not index-keyed.
         let info = self.parameter_info(index)?;
-        let get_value = unsafe { (*self.params_ext).get_value }
-            .ok_or(Error::InvalidParameter(index))?;
+        let get_value =
+            unsafe { (*self.params_ext).get_value }.ok_or(Error::InvalidParameter(index))?;
         let mut out = 0.0f64;
         let ok = unsafe { get_value(self.plugin, info.id, &raw mut out) };
         if !ok {
@@ -644,8 +644,8 @@ impl PluginCore for ClapPlugin {
             return Err(Error::InvalidParameter(index));
         }
         let info = self.parameter_info(index)?;
-        let value_to_text = unsafe { (*self.params_ext).value_to_text }
-            .ok_or(Error::InvalidParameter(index))?;
+        let value_to_text =
+            unsafe { (*self.params_ext).value_to_text }.ok_or(Error::InvalidParameter(index))?;
         let mut buf = [0i8; clap_sys::string_sizes::CLAP_NAME_SIZE];
         let buf_len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let ok = unsafe { value_to_text(self.plugin, info.id, value, buf.as_mut_ptr(), buf_len) };
@@ -850,12 +850,13 @@ impl truce_rack_core::editor::PluginEditor for ClapPlugin {
         }
         let window = handle_to_clap_window(parent);
         if let Some(set_parent) = unsafe { (*self.gui_ext).set_parent }
-            && !unsafe { set_parent(self.plugin, &raw const window) } {
-                if let Some(destroy) = unsafe { (*self.gui_ext).destroy } {
-                    unsafe { destroy(self.plugin) };
-                }
-                return Err(Error::Other("clap.gui::set_parent returned false".into()));
+            && !unsafe { set_parent(self.plugin, &raw const window) }
+        {
+            if let Some(destroy) = unsafe { (*self.gui_ext).destroy } {
+                unsafe { destroy(self.plugin) };
             }
+            return Err(Error::Other("clap.gui::set_parent returned false".into()));
+        }
         if let Some(show) = unsafe { (*self.gui_ext).show } {
             let _ = unsafe { show(self.plugin) };
         }
@@ -898,8 +899,7 @@ impl truce_rack_core::editor::PluginEditor for ClapPlugin {
         if !self.gui_open {
             return false;
         }
-        unsafe { (*self.gui_ext).can_resize }
-            .is_some_and(|f| unsafe { f(self.plugin) })
+        unsafe { (*self.gui_ext).can_resize }.is_some_and(|f| unsafe { f(self.plugin) })
     }
 
     fn set_size(&mut self, width: u32, height: u32) -> Option<(u32, u32)> {
@@ -985,8 +985,10 @@ impl Plugin<f32> for ClapPlugin {
         };
 
         let main_outputs = buffer.main_outputs();
-        let mut output_ptrs: Vec<*mut f32> =
-            main_outputs.iter_mut().map(|chan| chan.as_mut_ptr()).collect();
+        let mut output_ptrs: Vec<*mut f32> = main_outputs
+            .iter_mut()
+            .map(|chan| chan.as_mut_ptr())
+            .collect();
         let mut output_audio = clap_audio_buffer {
             data32: output_ptrs.as_mut_ptr(),
             data64: ptr::null_mut(),
@@ -1018,11 +1020,11 @@ impl Plugin<f32> for ClapPlugin {
         let plugin = self.plugin;
         let process_ptr = unsafe { (*plugin).process };
         let status = match process_ptr {
-            Some(process_fn) => run_audio_block_with::<ClapPlugin, i32>(
-                FORMAT,
-                CLAP_PROCESS_ERROR,
-                || unsafe { process_fn(plugin, &raw const process) },
-            ),
+            Some(process_fn) => {
+                run_audio_block_with::<ClapPlugin, i32>(FORMAT, CLAP_PROCESS_ERROR, || unsafe {
+                    process_fn(plugin, &raw const process)
+                })
+            }
             None => CLAP_PROCESS_ERROR,
         };
 
@@ -1204,9 +1206,11 @@ impl ConvertedInputEvents {
     }
 
     fn push_param_value(&mut self, sample_offset: u32, param_id: u32, value: f64) {
-        self.events.push(EventStorage::Param(
-            make_param_value_event(sample_offset, param_id, value),
-        ));
+        self.events.push(EventStorage::Param(make_param_value_event(
+            sample_offset,
+            param_id,
+            value,
+        )));
     }
 
     fn push_rack(&mut self, event: &truce_rack_core::events::Event) {
@@ -1230,7 +1234,11 @@ impl ConvertedInputEvents {
     fn push_midi(&mut self, offset: u32, midi: truce_rack_core::events::MidiData) {
         use truce_rack_core::events::MidiData;
         match midi {
-            MidiData::NoteOn { channel, note, velocity } => {
+            MidiData::NoteOn {
+                channel,
+                note,
+                velocity,
+            } => {
                 self.events.push(EventStorage::Note(make_note_event(
                     offset,
                     CLAP_EVENT_NOTE_ON,
@@ -1239,7 +1247,11 @@ impl ConvertedInputEvents {
                     f64::from(velocity) / 127.0,
                 )));
             }
-            MidiData::NoteOff { channel, note, velocity } => {
+            MidiData::NoteOff {
+                channel,
+                note,
+                velocity,
+            } => {
                 self.events.push(EventStorage::Note(make_note_event(
                     offset,
                     CLAP_EVENT_NOTE_OFF,
@@ -1248,7 +1260,11 @@ impl ConvertedInputEvents {
                     f64::from(velocity) / 127.0,
                 )));
             }
-            MidiData::ControlChange { channel, controller, value } => {
+            MidiData::ControlChange {
+                channel,
+                controller,
+                value,
+            } => {
                 let status = 0xB0 | (channel & 0x0F);
                 self.events.push(EventStorage::Midi(make_midi_event(
                     offset,
@@ -1262,7 +1278,11 @@ impl ConvertedInputEvents {
                     [status, program & 0x7F, 0],
                 )));
             }
-            MidiData::PolyAftertouch { channel, note, pressure } => {
+            MidiData::PolyAftertouch {
+                channel,
+                note,
+                pressure,
+            } => {
                 let status = 0xA0 | (channel & 0x0F);
                 self.events.push(EventStorage::Midi(make_midi_event(
                     offset,
@@ -1298,7 +1318,9 @@ impl ConvertedInputEvents {
 
     fn as_clap(&self) -> clap_input_events {
         clap_input_events {
-            ctx: std::ptr::from_ref::<Self>(self).cast::<std::ffi::c_void>().cast_mut(),
+            ctx: std::ptr::from_ref::<Self>(self)
+                .cast::<std::ffi::c_void>()
+                .cast_mut(),
             size: Some(input_events_size),
             get: Some(input_events_get),
         }
@@ -1388,7 +1410,8 @@ unsafe fn clap_event_to_rack(header: &clap_event_header) -> Option<truce_rack_co
             })
         }
         t if t == CLAP_EVENT_NOTE_ON => {
-            let e: &clap_event_note = unsafe { &*std::ptr::from_ref::<clap_event_header>(header).cast() };
+            let e: &clap_event_note =
+                unsafe { &*std::ptr::from_ref::<clap_event_header>(header).cast() };
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let velocity = (e.velocity * 127.0).round().clamp(0.0, 127.0) as u8;
             Some(Event {
@@ -1401,7 +1424,8 @@ unsafe fn clap_event_to_rack(header: &clap_event_header) -> Option<truce_rack_co
             })
         }
         t if t == CLAP_EVENT_NOTE_OFF => {
-            let e: &clap_event_note = unsafe { &*std::ptr::from_ref::<clap_event_header>(header).cast() };
+            let e: &clap_event_note =
+                unsafe { &*std::ptr::from_ref::<clap_event_header>(header).cast() };
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let velocity = (e.velocity * 127.0).round().clamp(0.0, 127.0) as u8;
             Some(Event {
@@ -1414,14 +1438,13 @@ unsafe fn clap_event_to_rack(header: &clap_event_header) -> Option<truce_rack_co
             })
         }
         t if t == CLAP_EVENT_MIDI => {
-            let e: &clap_event_midi = unsafe { &*std::ptr::from_ref::<clap_event_header>(header).cast() };
+            let e: &clap_event_midi =
+                unsafe { &*std::ptr::from_ref::<clap_event_header>(header).cast() };
             Some(Event {
                 sample_offset: offset,
                 body: EventBody::Midi(MidiData::Raw {
                     len: 3,
-                    data: [
-                        e.data[0], e.data[1], e.data[2], 0, 0, 0, 0, 0,
-                    ],
+                    data: [e.data[0], e.data[1], e.data[2], 0, 0, 0, 0, 0],
                 }),
             })
         }

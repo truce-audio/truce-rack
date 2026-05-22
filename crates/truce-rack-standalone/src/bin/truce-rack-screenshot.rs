@@ -145,7 +145,12 @@ fn walk_and_capture(
         let scanner = truce_rack_clap::ClapScanner::new();
         for info in scanner.scan().unwrap_or_default() {
             let label = format!("{} — {}", info.vendor, info.name);
-            targets.push((Format::Clap, info.name.clone(), label, info.unique_id.clone()));
+            targets.push((
+                Format::Clap,
+                info.name.clone(),
+                label,
+                info.unique_id.clone(),
+            ));
         }
     }
     #[cfg(feature = "vst3")]
@@ -153,7 +158,12 @@ fn walk_and_capture(
         let scanner = truce_rack_vst3::Vst3Scanner::new();
         for info in scanner.scan().unwrap_or_default() {
             let label = format!("{} — {}", info.vendor, info.name);
-            targets.push((Format::Vst3, info.name.clone(), label, info.unique_id.clone()));
+            targets.push((
+                Format::Vst3,
+                info.name.clone(),
+                label,
+                info.unique_id.clone(),
+            ));
         }
     }
     #[cfg(all(feature = "au", target_vendor = "apple"))]
@@ -241,48 +251,75 @@ fn direct_capture(format: Format, uid: &str, output_dir: &std::path::Path) {
         #[cfg(feature = "clap")]
         Format::Clap => {
             let scanner = truce_rack_clap::ClapScanner::new();
-            scanner.scan().unwrap_or_default().iter()
+            scanner
+                .scan()
+                .unwrap_or_default()
+                .iter()
                 .find(|p| p.unique_id == uid)
                 .map_or_else(
-                    || { eprintln!("[err] {tag} no match for {uid:?}"); 2 },
+                    || {
+                        eprintln!("[err] {tag} no match for {uid:?}");
+                        2
+                    },
                     |info| match scanner.load(info) {
                         Ok(mut p) => {
                             let label = format!("{} — {}", info.vendor, info.name);
                             capture_one(&mut p, Format::Clap, &info.name, &label, output_dir)
                         }
-                        Err(e) => { eprintln!("[err] {tag} load: {e}"); 1 }
+                        Err(e) => {
+                            eprintln!("[err] {tag} load: {e}");
+                            1
+                        }
                     },
                 )
         }
         #[cfg(feature = "vst3")]
         Format::Vst3 => {
             let scanner = truce_rack_vst3::Vst3Scanner::new();
-            scanner.scan().unwrap_or_default().iter()
+            scanner
+                .scan()
+                .unwrap_or_default()
+                .iter()
                 .find(|p| p.unique_id == uid)
                 .map_or_else(
-                    || { eprintln!("[err] {tag} no match for {uid:?}"); 2 },
+                    || {
+                        eprintln!("[err] {tag} no match for {uid:?}");
+                        2
+                    },
                     |info| match scanner.load(info) {
                         Ok(mut p) => {
                             let label = format!("{} — {}", info.vendor, info.name);
                             capture_one(&mut p, Format::Vst3, &info.name, &label, output_dir)
                         }
-                        Err(e) => { eprintln!("[err] {tag} load: {e}"); 1 }
+                        Err(e) => {
+                            eprintln!("[err] {tag} load: {e}");
+                            1
+                        }
                     },
                 )
         }
         #[cfg(all(feature = "au", target_vendor = "apple"))]
         Format::Au => {
             let scanner = truce_rack_au::AuScanner::new();
-            scanner.scan().unwrap_or_default().iter()
+            scanner
+                .scan()
+                .unwrap_or_default()
+                .iter()
                 .find(|p| p.unique_id == uid)
                 .map_or_else(
-                    || { eprintln!("[err] {tag} no match for {uid:?}"); 2 },
+                    || {
+                        eprintln!("[err] {tag} no match for {uid:?}");
+                        2
+                    },
                     |info| match scanner.load(info) {
                         Ok(mut p) => {
                             let label = format!("{} — {}", info.vendor, info.name);
                             capture_one(&mut p, Format::Au, &info.name, &label, output_dir)
                         }
-                        Err(e) => { eprintln!("[err] {tag} load: {e}"); 1 }
+                        Err(e) => {
+                            eprintln!("[err] {tag} load: {e}");
+                            1
+                        }
                     },
                 )
         }

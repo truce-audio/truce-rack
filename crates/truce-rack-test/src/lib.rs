@@ -1,7 +1,7 @@
 //! Assertion helpers for truce-rack host integration tests.
 //!
 //! Use these from host-side test suites that want to verify a
-//! [`PluginScanner`] impl can scan a corpus, load each result,
+//! [`truce_rack_core::scanner::PluginScanner`] impl can scan a corpus, load each result,
 //! activate it, and render a known input without NaN / clipping.
 //!
 //! The helpers operate on `Plugin<f32>` instances by default;

@@ -67,8 +67,7 @@ const LV2_URID_MAP_URI: &[u8] = b"http://lv2plug.in/ns/ext/urid#map\0";
 const LV2_ATOM_SEQUENCE_URI: &[u8] = b"http://lv2plug.in/ns/ext/atom#Sequence\0";
 const LV2_UI_PARENT_URI: &[u8] = b"http://lv2plug.in/ns/extensions/ui#parent\0";
 const LV2_UI_RESIZE_URI: &[u8] = b"http://lv2plug.in/ns/extensions/ui#resize\0";
-const LV2_UI_IDLE_INTERFACE_URI: &[u8] =
-    b"http://lv2plug.in/ns/extensions/ui#idleInterface\0";
+const LV2_UI_IDLE_INTERFACE_URI: &[u8] = b"http://lv2plug.in/ns/extensions/ui#idleInterface\0";
 const LV2_UI_RESIZE_INTERFACE_URI: &[u8] = LV2_UI_RESIZE_URI;
 
 #[cfg(target_os = "macos")]
@@ -671,7 +670,9 @@ unsafe fn node_uri_to_path(node: *const lilv_sys::LilvNode) -> Option<PathBuf> {
     if raw.is_null() {
         return None;
     }
-    let s = unsafe { CStr::from_ptr(raw) }.to_string_lossy().into_owned();
+    let s = unsafe { CStr::from_ptr(raw) }
+        .to_string_lossy()
+        .into_owned();
     unsafe { lilv_sys::lilv_free(raw.cast()) };
     Some(PathBuf::from(s))
 }
@@ -941,11 +942,16 @@ unsafe fn classify_ports(
     plugin: *const lilv_sys::LilvPlugin,
 ) -> (Vec<PortInfo>, usize, usize, Vec<usize>, Vec<f32>) {
     let count = unsafe { lilv_sys::lilv_plugin_get_num_ports(plugin) };
-    let audio_uri = unsafe { lilv_sys::lilv_new_uri(world, lilv_sys::LILV_URI_AUDIO_PORT.as_ptr().cast()) };
-    let control_uri = unsafe { lilv_sys::lilv_new_uri(world, lilv_sys::LILV_URI_CONTROL_PORT.as_ptr().cast()) };
-    let atom_uri = unsafe { lilv_sys::lilv_new_uri(world, lilv_sys::LILV_URI_ATOM_PORT.as_ptr().cast()) };
-    let input_uri = unsafe { lilv_sys::lilv_new_uri(world, lilv_sys::LILV_URI_INPUT_PORT.as_ptr().cast()) };
-    let output_uri = unsafe { lilv_sys::lilv_new_uri(world, lilv_sys::LILV_URI_OUTPUT_PORT.as_ptr().cast()) };
+    let audio_uri =
+        unsafe { lilv_sys::lilv_new_uri(world, lilv_sys::LILV_URI_AUDIO_PORT.as_ptr().cast()) };
+    let control_uri =
+        unsafe { lilv_sys::lilv_new_uri(world, lilv_sys::LILV_URI_CONTROL_PORT.as_ptr().cast()) };
+    let atom_uri =
+        unsafe { lilv_sys::lilv_new_uri(world, lilv_sys::LILV_URI_ATOM_PORT.as_ptr().cast()) };
+    let input_uri =
+        unsafe { lilv_sys::lilv_new_uri(world, lilv_sys::LILV_URI_INPUT_PORT.as_ptr().cast()) };
+    let output_uri =
+        unsafe { lilv_sys::lilv_new_uri(world, lilv_sys::LILV_URI_OUTPUT_PORT.as_ptr().cast()) };
 
     let mut ports = Vec::with_capacity(count as usize);
     let mut audio_in_count: usize = 0;
@@ -1056,12 +1062,7 @@ fn midi_bytes(body: &EventBody) -> Option<(u8, u8, u8, usize)> {
             channel,
             controller,
             value,
-        }) => Some((
-            0xB0 | (channel & 0x0F),
-            controller & 0x7F,
-            value & 0x7F,
-            3,
-        )),
+        }) => Some((0xB0 | (channel & 0x0F), controller & 0x7F, value & 0x7F, 3)),
         EventBody::Midi(MidiData::ProgramChange { channel, program }) => {
             Some((0xC0 | (channel & 0x0F), program & 0x7F, 0, 2))
         }
@@ -1191,9 +1192,7 @@ impl PluginCore for Lv2Plugin {
                 )
             };
             if inst.is_null() {
-                return Err(Error::Other(
-                    "lilv_plugin_instantiate returned NULL".into(),
-                ));
+                return Err(Error::Other("lilv_plugin_instantiate returned NULL".into()));
             }
             self.instance = inst;
             self.sample_rate = sample_rate;
@@ -1277,9 +1276,7 @@ impl PluginEditor for Lv2Plugin {
                     break;
                 }
                 let uri = (*d).uri;
-                if !uri.is_null()
-                    && CStr::from_ptr(uri) == bundle.ui_uri.as_c_str()
-                {
+                if !uri.is_null() && CStr::from_ptr(uri) == bundle.ui_uri.as_c_str() {
                     chosen = d;
                     break;
                 }

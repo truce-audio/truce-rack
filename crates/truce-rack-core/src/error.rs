@@ -47,7 +47,7 @@ pub enum Error {
     #[error("parameter index {0} out of range")]
     InvalidParameter(usize),
 
-    /// Method invoked before [`crate::Plugin::activate`].
+    /// Method invoked before [`crate::PluginCore::activate`].
     #[error("plugin not activated")]
     NotActivated,
 

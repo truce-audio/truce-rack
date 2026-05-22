@@ -4,12 +4,12 @@
 //! opens the default cpal output device, and renders the plugin
 //! into the device's audio stream. Optionally also opens a
 //! baseview window and embeds the plugin's editor — see the `gui`
-//! feature and [`windowed`].
+//! feature and the `windowed` module.
 //!
 //! # Layout
 //!
-//! - [`run_clap`] / [`run_vst3`] / [`run_au`] — one entry point per
-//!   format wrapper. Each is feature-gated.
+//! - `run_clap` / `run_vst3` / `run_au` / `run_lv2` — one entry point
+//!   per format wrapper. Each is feature-gated.
 //! - [`run_with_plugin`] — common cpal plumbing every headless
 //!   entry point uses.
 //! - [`list_plugins`] — scan every enabled format and print one

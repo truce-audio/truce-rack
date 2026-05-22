@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 
 use vst3::Steinberg::Vst::{
-    AudioBusBuffers, AudioBusBuffers__type0, Event, Event__type0, Event_::EventTypes_,
+    AudioBusBuffers, AudioBusBuffers__type0, Event, Event_::EventTypes_, Event__type0,
     IAudioProcessor, IAudioProcessorTrait, IComponent, IComponentTrait, IConnectionPoint,
     IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList, IEventListTrait,
     IParameterChanges, NoteOffEvent, NoteOnEvent, ParameterInfo as Vst3ParameterInfo,
@@ -233,9 +233,9 @@ fn hex_to_tuid(hex: &str) -> Option<TUID> {
 mod mac {
     //! `CFBundle`-backed loader for VST3 bundles on macOS.
     //!
-    //! Plugins like Surge XT Effects call into CFPlugin during
+    //! Plugins like Surge XT Effects call into `CFPlugin` during
     //! `bundleEntry` (specifically `CFPlugInRegisterFactories`,
-    //! which lives behind the "AddInstanceForFactory" log line).
+    //! which lives behind the `AddInstanceForFactory` log line).
     //! Those APIs only work when the dylib was loaded through a
     //! registered `CFBundle` — raw `dlopen` leaves the bundle
     //! unknown to CoreFoundation and the plugin dereferences
@@ -258,12 +258,10 @@ mod mac {
 
     impl MacBundle {
         pub(super) fn open(bundle_path: &Path) -> Result<Self> {
-            let path_str = bundle_path
-                .to_str()
-                .ok_or_else(|| Error::LoadFailed {
-                    path: bundle_path.to_path_buf(),
-                    reason: "bundle path is not valid UTF-8".into(),
-                })?;
+            let path_str = bundle_path.to_str().ok_or_else(|| Error::LoadFailed {
+                path: bundle_path.to_path_buf(),
+                reason: "bundle path is not valid UTF-8".into(),
+            })?;
             let cf_path = CFString::new(path_str);
             // CFURLCreateWithFileSystemPath with `isDirectory = true`
             // is what every reference VST3 host uses on macOS — a
@@ -320,11 +318,11 @@ mod mac {
         /// `core-foundation-sys`. Hand this to `bundleEntry` —
         /// it's the host's identity to the plugin.
         pub(super) fn raw(&self) -> *mut std::ffi::c_void {
-            self.bundle.as_concrete_TypeRef().cast::<std::ffi::c_void>() as *mut _
+            self.bundle.as_concrete_TypeRef().cast::<std::ffi::c_void>()
         }
 
         /// Look up an exported symbol. `name` may end in a trailing
-        /// NUL (we strip it before handing the text to CFString).
+        /// NUL (we strip it before handing the text to `CFString`).
         pub(super) unsafe fn function_ptr(&self, name: &[u8]) -> Option<*mut std::ffi::c_void> {
             let name = match name.split_last() {
                 Some((0, rest)) => rest,
@@ -413,31 +411,27 @@ struct LoadedModule {
 impl LoadedModule {
     unsafe fn open(bundle: &Path) -> Result<Self> {
         let binary = bundle_binary_path(bundle);
-        let library = unsafe { libloading::Library::new(&binary) }.map_err(|e| {
-            Error::LoadFailed {
+        let library =
+            unsafe { libloading::Library::new(&binary) }.map_err(|e| Error::LoadFailed {
                 path: bundle.to_path_buf(),
                 reason: format!("dlopen: {e}"),
-            }
-        })?;
+            })?;
         Ok(Self { library })
     }
 
     fn factory(&self) -> Result<ComPtr<IPluginFactory>> {
-        let get_factory: libloading::Symbol<
-            '_,
-            unsafe extern "C" fn() -> *mut IPluginFactory,
-        > = unsafe { self.library.get(GET_FACTORY_SYMBOL) }.map_err(|e| {
-            Error::LoadFailed {
+        let get_factory: libloading::Symbol<'_, unsafe extern "C" fn() -> *mut IPluginFactory> =
+            unsafe { self.library.get(GET_FACTORY_SYMBOL) }.map_err(|e| Error::LoadFailed {
                 path: PathBuf::new(),
                 reason: format!("missing GetPluginFactory: {e}"),
-            }
-        })?;
+            })?;
         let ptr = unsafe { get_factory() };
-        let factory = unsafe { ComPtr::<IPluginFactory>::from_raw(ptr) }
-            .ok_or_else(|| Error::LoadFailed {
+        let factory = unsafe { ComPtr::<IPluginFactory>::from_raw(ptr) }.ok_or_else(|| {
+            Error::LoadFailed {
                 path: PathBuf::new(),
                 reason: "GetPluginFactory returned NULL".into(),
-            })?;
+            }
+        })?;
         Ok(factory)
     }
 }
@@ -482,11 +476,12 @@ impl LoadedModule {
         let get_factory: unsafe extern "C" fn() -> *mut IPluginFactory =
             unsafe { std::mem::transmute(raw) };
         let ptr = unsafe { get_factory() };
-        let factory = unsafe { ComPtr::<IPluginFactory>::from_raw(ptr) }
-            .ok_or_else(|| Error::LoadFailed {
+        let factory = unsafe { ComPtr::<IPluginFactory>::from_raw(ptr) }.ok_or_else(|| {
+            Error::LoadFailed {
                 path: self.bundle.path().to_path_buf(),
                 reason: "GetPluginFactory returned NULL".into(),
-            })?;
+            }
+        })?;
         Ok(factory)
     }
 }
@@ -553,13 +548,13 @@ impl Vst3Plugin {
         })?;
 
         // Create IComponent.
-        let component_ptr = unsafe {
-            create_instance::<IComponent>(&factory, &cid)
-        }
-        .ok_or_else(|| Error::LoadFailed {
-            path: info.path.clone(),
-            reason: "factory.createInstance(IComponent) returned NULL".into(),
-        })?;
+        let component_ptr =
+            unsafe { create_instance::<IComponent>(&factory, &cid) }.ok_or_else(|| {
+                Error::LoadFailed {
+                    path: info.path.clone(),
+                    reason: "factory.createInstance(IComponent) returned NULL".into(),
+                }
+            })?;
         let component = component_ptr;
 
         // Initialize the component. Many plugins accept a NULL
@@ -608,7 +603,9 @@ impl Vst3Plugin {
                 .cast::<IEditController>()
                 .ok_or_else(|| Error::LoadFailed {
                     path: info.path.clone(),
-                    reason: "component is not its own controller and didn't report a controller cid".into(),
+                    reason:
+                        "component is not its own controller and didn't report a controller cid"
+                            .into(),
                 })?;
             (ctrl, false)
         };
@@ -679,10 +676,7 @@ fn platform_type_for_handle(
     match handle {
         WindowHandle::NSView(p) => (kPlatformTypeNSView, p),
         WindowHandle::HWND(p) => (kPlatformTypeHWND, p),
-        WindowHandle::X11(id) => (
-            kPlatformTypeX11EmbedWindowID,
-            id as *mut std::ffi::c_void,
-        ),
+        WindowHandle::X11(id) => (kPlatformTypeX11EmbedWindowID, id as *mut std::ffi::c_void),
     }
 }
 
@@ -696,9 +690,8 @@ where
     let mut obj: *mut std::ffi::c_void = ptr::null_mut();
     // `com_scrape_types::Guid` and `TUID` share the same
     // `[i8; 16]` layout — reinterpret to avoid an extra copy.
-    let iid_bytes: &TUID = unsafe {
-        &*(std::ptr::from_ref::<vst3::com_scrape_types::Guid>(&I::IID).cast::<TUID>())
-    };
+    let iid_bytes: &TUID =
+        unsafe { &*(std::ptr::from_ref::<vst3::com_scrape_types::Guid>(&I::IID).cast::<TUID>()) };
     let cid_ptr = cid.as_ptr();
     let iid_ptr = iid_bytes.as_ptr();
     if unsafe { factory.createInstance(cid_ptr, iid_ptr, &raw mut obj) } != kResultOk
@@ -848,12 +841,8 @@ impl PluginCore for Vst3Plugin {
         let mut input_arr = STEREO_ARRANGEMENT;
         let mut output_arr = STEREO_ARRANGEMENT;
         let _ = unsafe {
-            self.processor.setBusArrangements(
-                &raw mut input_arr,
-                1,
-                &raw mut output_arr,
-                1,
-            )
+            self.processor
+                .setBusArrangements(&raw mut input_arr, 1, &raw mut output_arr, 1)
         };
 
         let mut setup = ProcessSetup {
@@ -865,13 +854,17 @@ impl PluginCore for Vst3Plugin {
             sampleRate: sample_rate,
         };
         if unsafe { self.processor.setupProcessing(&raw mut setup) } != kResultOk {
-            return Err(Error::Other("IAudioProcessor::setupProcessing failed".into()));
+            return Err(Error::Other(
+                "IAudioProcessor::setupProcessing failed".into(),
+            ));
         }
         if unsafe { self.component.setActive(1) } != kResultOk {
             return Err(Error::Other("IComponent::setActive(true) failed".into()));
         }
         if unsafe { self.processor.setProcessing(1) } != kResultOk {
-            return Err(Error::Other("IAudioProcessor::setProcessing(true) failed".into()));
+            return Err(Error::Other(
+                "IAudioProcessor::setProcessing(true) failed".into(),
+            ));
         }
         self.processing = true;
         self.active_layout = Some(layout);
@@ -1070,10 +1063,8 @@ impl Plugin<f32> for Vst3Plugin {
             .ok_or_else(|| Error::Other("EventList3 missing IEventList IID".into()))?;
 
         let main_inputs = buffer.main_inputs();
-        let mut input_ptrs: Vec<*mut f32> = main_inputs
-            .iter()
-            .map(|c| c.as_ptr().cast_mut())
-            .collect();
+        let mut input_ptrs: Vec<*mut f32> =
+            main_inputs.iter().map(|c| c.as_ptr().cast_mut()).collect();
         let mut input_bus = AudioBusBuffers {
             numChannels: i32::try_from(input_ptrs.len()).unwrap_or(0),
             silenceFlags: 0,
@@ -1083,10 +1074,8 @@ impl Plugin<f32> for Vst3Plugin {
         };
 
         let main_outputs = buffer.main_outputs();
-        let mut output_ptrs: Vec<*mut f32> = main_outputs
-            .iter_mut()
-            .map(|c| c.as_mut_ptr())
-            .collect();
+        let mut output_ptrs: Vec<*mut f32> =
+            main_outputs.iter_mut().map(|c| c.as_mut_ptr()).collect();
         let mut output_bus = AudioBusBuffers {
             numChannels: i32::try_from(output_ptrs.len()).unwrap_or(0),
             silenceFlags: 0,
@@ -1159,7 +1148,11 @@ impl EventBuffer {
             },
         };
         match body {
-            MidiData::NoteOn { channel, note, velocity } => {
+            MidiData::NoteOn {
+                channel,
+                note,
+                velocity,
+            } => {
                 let mut ev = header(u16::try_from(EventTypes_::kNoteOnEvent).unwrap_or(0));
                 ev.__field0 = Event__type0 {
                     noteOn: NoteOnEvent {
@@ -1173,7 +1166,11 @@ impl EventBuffer {
                 };
                 self.events.push(ev);
             }
-            MidiData::NoteOff { channel, note, velocity } => {
+            MidiData::NoteOff {
+                channel,
+                note,
+                velocity,
+            } => {
                 let mut ev = header(u16::try_from(EventTypes_::kNoteOffEvent).unwrap_or(0));
                 ev.__field0 = Event__type0 {
                     noteOff: NoteOffEvent {
@@ -1186,7 +1183,11 @@ impl EventBuffer {
                 };
                 self.events.push(ev);
             }
-            MidiData::PolyAftertouch { channel, note, pressure } => {
+            MidiData::PolyAftertouch {
+                channel,
+                note,
+                pressure,
+            } => {
                 let mut ev = header(u16::try_from(EventTypes_::kPolyPressureEvent).unwrap_or(0));
                 ev.__field0 = Event__type0 {
                     polyPressure: PolyPressureEvent {
@@ -1280,11 +1281,7 @@ impl IBStreamTrait for MemoryStream {
         let take = want.min(available);
         if take > 0 {
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    data.as_ptr().add(pos),
-                    buffer.cast::<u8>(),
-                    take,
-                );
+                std::ptr::copy_nonoverlapping(data.as_ptr().add(pos), buffer.cast::<u8>(), take);
             }
         }
         self.position.set(pos + take);
@@ -1313,11 +1310,7 @@ impl IBStreamTrait for MemoryStream {
             data.resize(pos + want, 0);
         }
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                buffer.cast::<u8>(),
-                data.as_mut_ptr().add(pos),
-                want,
-            );
+            std::ptr::copy_nonoverlapping(buffer.cast::<u8>(), data.as_mut_ptr().add(pos), want);
         }
         self.position.set(pos + want);
         if !num_bytes_written.is_null() {

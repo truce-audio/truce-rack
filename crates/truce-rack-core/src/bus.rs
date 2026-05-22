@@ -3,7 +3,7 @@
 //! A [`BusLayout`] is the host-side description of one of the
 //! audio bus configurations a plugin can operate in. Plugins
 //! advertise multiple layouts (mono, stereo, stereo + sidechain,
-//! 5.1, …); the host picks one before [`crate::Plugin::activate`].
+//! 5.1, …); the host picks one before [`crate::PluginCore::activate`].
 //!
 //! Mirrors `truce_core::bus::BusLayout`. Repeated rather than
 //! shared so a rack consumer doesn't transitively pull in any
@@ -70,7 +70,7 @@ pub struct Bus {
 ///
 /// Hosts iterate over a plugin's declared layouts and pick one
 /// before activation. After activation the layout is fixed until
-/// [`crate::Plugin::deactivate`] is called.
+/// [`crate::PluginCore::deactivate`] is called.
 #[derive(Debug, Clone)]
 pub struct BusLayout {
     /// Input buses in declaration order. Index 0 is the main

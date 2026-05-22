@@ -79,7 +79,7 @@ pub trait PluginCore: Send {
     fn info(&self) -> &PluginInfo;
 
     /// The bus layout currently active. `None` until
-    /// [`Plugin::activate`] picks one.
+    /// [`PluginCore::activate`] picks one.
     fn active_layout(&self) -> Option<&BusLayout>;
 
     /// All bus layouts the plugin supports. The host picks one

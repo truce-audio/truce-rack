@@ -159,7 +159,8 @@ pub struct EventList {
 }
 
 impl EventList {
-    /// An empty list with inline capacity for [`EVENT_LIST_INLINE`].
+    /// An empty list with inline capacity for 32 events before
+    /// spilling to the heap.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

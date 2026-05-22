@@ -34,14 +34,13 @@ use truce_rack_core::plugin::{Plugin, PluginCore, ProcessContext, ProcessStatus}
 use truce_rack_core::scanner::PluginScanner;
 
 use objc2_audio_toolbox::{
-    AURenderCallbackStruct, AudioComponent, AudioComponentCopyName, AudioComponentDescription,
-    AudioComponentFindNext, AudioComponentFlags, AudioComponentInstance,
+    AUPreset, AURenderCallbackStruct, AudioComponent, AudioComponentCopyName,
+    AudioComponentDescription, AudioComponentFindNext, AudioComponentFlags, AudioComponentInstance,
     AudioComponentInstanceDispose, AudioComponentInstanceNew, AudioComponentInstantiate,
-    AudioComponentInstantiationOptions, AudioUnitGetParameter,
-    AudioUnitGetProperty, AudioUnitGetPropertyInfo, AudioUnitInitialize, AudioUnitParameterID,
-    AudioUnitParameterInfo, AudioUnitRender, AudioUnitRenderActionFlags, AudioUnitSetParameter,
-    AudioUnitSetProperty, AudioUnitUninitialize, AUPreset, MusicDeviceMIDIEvent,
-    kAudioUnitProperty_ClassInfo,
+    AudioComponentInstantiationOptions, AudioUnitGetParameter, AudioUnitGetProperty,
+    AudioUnitGetPropertyInfo, AudioUnitInitialize, AudioUnitParameterID, AudioUnitParameterInfo,
+    AudioUnitRender, AudioUnitRenderActionFlags, AudioUnitSetParameter, AudioUnitSetProperty,
+    AudioUnitUninitialize, MusicDeviceMIDIEvent, kAudioUnitProperty_ClassInfo,
     kAudioUnitProperty_FactoryPresets, kAudioUnitProperty_MaximumFramesPerSlice,
     kAudioUnitProperty_ParameterInfo, kAudioUnitProperty_ParameterList,
     kAudioUnitProperty_PresentPreset, kAudioUnitProperty_SetRenderCallback,
@@ -245,9 +244,7 @@ fn au_parameter_to_rack(id: AudioUnitParameterID, info: &AudioUnitParameterInfo)
     }
 }
 
-fn au_param_flags_to_rack(
-    info: &AudioUnitParameterInfo,
-) -> truce_rack_core::info::ParameterFlags {
+fn au_param_flags_to_rack(info: &AudioUnitParameterInfo) -> truce_rack_core::info::ParameterFlags {
     use objc2_audio_toolbox::AudioUnitParameterOptions as Opt;
     let mut flags = truce_rack_core::info::ParameterFlags::empty();
     // AU treats most parameters as automatable by default; only
@@ -270,8 +267,7 @@ fn au_param_flags_to_rack(
 unsafe fn fetch_factory_presets(unit: AudioComponentInstance) -> Option<Vec<PresetInfo>> {
     use objc2_core_foundation::{CFArray, CFRetained};
     let mut presets: *const CFArray = ptr::null();
-    let mut size =
-        u32::try_from(std::mem::size_of::<*const CFArray>()).unwrap_or(0);
+    let mut size = u32::try_from(std::mem::size_of::<*const CFArray>()).unwrap_or(0);
     let status = unsafe {
         AudioUnitGetProperty(
             unit,
@@ -287,9 +283,7 @@ unsafe fn fetch_factory_presets(unit: AudioComponentInstance) -> Option<Vec<Pres
     }
     // CFArrayRef from FactoryPresets is owned per Apple docs —
     // we wrap in CFRetained so it's released on drop.
-    let array = unsafe {
-        CFRetained::from_raw(ptr::NonNull::new_unchecked(presets.cast_mut()))
-    };
+    let array = unsafe { CFRetained::from_raw(ptr::NonNull::new_unchecked(presets.cast_mut())) };
     let count = array.count();
     if count <= 0 {
         return Some(Vec::new());
@@ -329,28 +323,48 @@ fn send_midi(unit: AudioComponentInstance, event: &truce_rack_core::events::Even
     use truce_rack_core::events::{EventBody, MidiData};
     let offset = event.sample_offset;
     let (status, d1, d2) = match event.body {
-        EventBody::Midi(MidiData::NoteOn { channel, note, velocity }) => (
+        EventBody::Midi(MidiData::NoteOn {
+            channel,
+            note,
+            velocity,
+        }) => (
             0x90 | u32::from(channel & 0x0F),
             u32::from(note & 0x7F),
             u32::from(velocity & 0x7F),
         ),
-        EventBody::Midi(MidiData::NoteOff { channel, note, velocity }) => (
+        EventBody::Midi(MidiData::NoteOff {
+            channel,
+            note,
+            velocity,
+        }) => (
             0x80 | u32::from(channel & 0x0F),
             u32::from(note & 0x7F),
             u32::from(velocity & 0x7F),
         ),
-        EventBody::Midi(MidiData::ControlChange { channel, controller, value }) => (
+        EventBody::Midi(MidiData::ControlChange {
+            channel,
+            controller,
+            value,
+        }) => (
             0xB0 | u32::from(channel & 0x0F),
             u32::from(controller & 0x7F),
             u32::from(value & 0x7F),
         ),
-        EventBody::Midi(MidiData::ProgramChange { channel, program }) => {
-            (0xC0 | u32::from(channel & 0x0F), u32::from(program & 0x7F), 0)
-        }
-        EventBody::Midi(MidiData::ChannelAftertouch { channel, pressure }) => {
-            (0xD0 | u32::from(channel & 0x0F), u32::from(pressure & 0x7F), 0)
-        }
-        EventBody::Midi(MidiData::PolyAftertouch { channel, note, pressure }) => (
+        EventBody::Midi(MidiData::ProgramChange { channel, program }) => (
+            0xC0 | u32::from(channel & 0x0F),
+            u32::from(program & 0x7F),
+            0,
+        ),
+        EventBody::Midi(MidiData::ChannelAftertouch { channel, pressure }) => (
+            0xD0 | u32::from(channel & 0x0F),
+            u32::from(pressure & 0x7F),
+            0,
+        ),
+        EventBody::Midi(MidiData::PolyAftertouch {
+            channel,
+            note,
+            pressure,
+        }) => (
             0xA0 | u32::from(channel & 0x0F),
             u32::from(note & 0x7F),
             u32::from(pressure & 0x7F),
@@ -407,8 +421,7 @@ fn instantiate_async(
     use std::time::{Duration, Instant};
 
     let done = Arc::new(AtomicBool::new(false));
-    let inst_ptr: Arc<AtomicPtr<std::ffi::c_void>> =
-        Arc::new(AtomicPtr::new(ptr::null_mut()));
+    let inst_ptr: Arc<AtomicPtr<std::ffi::c_void>> = Arc::new(AtomicPtr::new(ptr::null_mut()));
     let status_atom = Arc::new(AtomicI32::new(0));
 
     let done_clone = Arc::clone(&done);
@@ -420,13 +433,11 @@ fn instantiate_async(
     // duration of the call, releases after firing. As long as our
     // Arc holders outlive the block (which we ensure by holding
     // them until `done == true`), the closure's captures stay live.
-    let block = block2::RcBlock::new(
-        move |inst: AudioComponentInstance, status: i32| {
-            inst_clone.store(inst.cast(), Ordering::Release);
-            status_clone.store(status, Ordering::Release);
-            done_clone.store(true, Ordering::Release);
-        },
-    );
+    let block = block2::RcBlock::new(move |inst: AudioComponentInstance, status: i32| {
+        inst_clone.store(inst.cast(), Ordering::Release);
+        status_clone.store(status, Ordering::Release);
+        done_clone.store(true, Ordering::Release);
+    });
     unsafe {
         AudioComponentInstantiate(
             component,
@@ -738,8 +749,8 @@ unsafe fn has_cocoa_ui(unit: AudioComponentInstance) -> bool {
 /// large enough; the caller casts the data pointer.
 fn alloc_audio_buffer_list(n_buffers: usize) -> Vec<u8> {
     let n = n_buffers.max(1);
-    let size = std::mem::size_of::<AudioBufferList>()
-        + (n - 1) * std::mem::size_of::<CAAudioBuffer>();
+    let size =
+        std::mem::size_of::<AudioBufferList>() + (n - 1) * std::mem::size_of::<CAAudioBuffer>();
     vec![0u8; size]
 }
 
@@ -855,9 +866,8 @@ impl PluginCore for AuPlugin {
             .ok_or(Error::InvalidParameter(index))?;
         #[allow(clippy::cast_possible_truncation)]
         let v = value as f32;
-        let status = unsafe {
-            AudioUnitSetParameter(self.instance, id, kAudioUnitScope_Global, 0, v, 0)
-        };
+        let status =
+            unsafe { AudioUnitSetParameter(self.instance, id, kAudioUnitScope_Global, 0, v, 0) };
         if status != 0 {
             return Err(Error::Other(format!(
                 "AudioUnitSetParameter failed: OSStatus {status}"
@@ -872,9 +882,7 @@ impl PluginCore for AuPlugin {
     fn preset_info(&self, index: usize) -> Result<PresetInfo> {
         let presets = unsafe { fetch_factory_presets(self.instance) }
             .ok_or_else(|| Error::Other("kAudioUnitProperty_FactoryPresets failed".into()))?;
-        let preset = presets
-            .get(index)
-            .ok_or(Error::InvalidParameter(index))?;
+        let preset = presets.get(index).ok_or(Error::InvalidParameter(index))?;
         Ok(preset.clone())
     }
 
@@ -905,8 +913,7 @@ impl PluginCore for AuPlugin {
             CFData, CFPropertyList, CFPropertyListCreateData, CFPropertyListFormat, CFRetained,
         };
         let mut class_info: *const CFPropertyList = ptr::null();
-        let mut size = u32::try_from(std::mem::size_of::<*const CFPropertyList>())
-            .unwrap_or(0);
+        let mut size = u32::try_from(std::mem::size_of::<*const CFPropertyList>()).unwrap_or(0);
         let status = unsafe {
             AudioUnitGetProperty(
                 self.instance,
@@ -937,9 +944,8 @@ impl PluginCore for AuPlugin {
                 &raw mut error,
             )
         };
-        let data = data.ok_or_else(|| {
-            Error::Other("CFPropertyListCreateData returned null".into())
-        })?;
+        let data =
+            data.ok_or_else(|| Error::Other("CFPropertyListCreateData returned null".into()))?;
         let len = data.length();
         if len < 0 {
             return Err(Error::Other("CFData length negative".into()));
@@ -961,25 +967,22 @@ impl PluginCore for AuPlugin {
 
     fn load_state(&mut self, bytes: &[u8]) -> Result<()> {
         use objc2_core_foundation::{
-            CFData, CFPropertyList, CFPropertyListCreateWithData, CFPropertyListFormat,
-            CFRetained,
+            CFData, CFPropertyList, CFPropertyListCreateWithData, CFPropertyListFormat, CFRetained,
         };
         if bytes.is_empty() {
             return Err(Error::Other("empty AU state".into()));
         }
         #[allow(clippy::cast_possible_wrap)]
-        let cf_data: CFRetained<CFData> = unsafe {
-            CFData::new(None, bytes.as_ptr(), bytes.len() as isize)
-        }
-        .ok_or_else(|| Error::Other("CFData::new returned null".into()))?;
+        let cf_data: CFRetained<CFData> =
+            unsafe { CFData::new(None, bytes.as_ptr(), bytes.len() as isize) }
+                .ok_or_else(|| Error::Other("CFData::new returned null".into()))?;
         let mut error: *mut objc2_core_foundation::CFError = ptr::null_mut();
         let mut format = CFPropertyListFormat::BinaryFormat_v1_0;
         let plist: Option<CFRetained<CFPropertyList>> = unsafe {
             CFPropertyListCreateWithData(None, Some(&cf_data), 0, &raw mut format, &raw mut error)
         };
-        let plist = plist.ok_or_else(|| {
-            Error::Other("CFPropertyListCreateWithData returned null".into())
-        })?;
+        let plist = plist
+            .ok_or_else(|| Error::Other("CFPropertyListCreateWithData returned null".into()))?;
         let plist_ptr: *const CFPropertyList = CFRetained::as_ptr(&plist).as_ptr().cast_const();
         let status = unsafe {
             AudioUnitSetProperty(
@@ -1196,7 +1199,10 @@ type UiViewFn = unsafe extern "C-unwind" fn(
 /// instantiate the factory, ask it for an `NSView`, and add it as a
 /// subview of `parent_ptr`. Stores the live factory + view on
 /// `self.editor` so they survive `open` returning.
-unsafe fn open_cocoa_editor(plugin: &mut AuPlugin, parent_ptr: *mut std::ffi::c_void) -> Result<()> {
+unsafe fn open_cocoa_editor(
+    plugin: &mut AuPlugin,
+    parent_ptr: *mut std::ffi::c_void,
+) -> Result<()> {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     use objc2_audio_toolbox::{AudioUnitCocoaViewInfo, kAudioUnitProperty_CocoaUI};
@@ -1255,24 +1261,26 @@ unsafe fn open_cocoa_editor(plugin: &mut AuPlugin, parent_ptr: *mut std::ffi::c_
     // matches `id` (and any future runtime type checks pass).
     // SAFETY: toll-free bridging guarantees identical layout.
     let bundle_url_ns: &objc2_foundation::NSURL = unsafe {
-        &*CFRetained::as_ptr(&bundle_url).as_ptr().cast::<objc2_foundation::NSURL>()
+        &*CFRetained::as_ptr(&bundle_url)
+            .as_ptr()
+            .cast::<objc2_foundation::NSURL>()
     };
     let class_name_ns: &objc2_foundation::NSString = unsafe {
-        &*CFRetained::as_ptr(&class_name).as_ptr().cast::<objc2_foundation::NSString>()
+        &*CFRetained::as_ptr(&class_name)
+            .as_ptr()
+            .cast::<objc2_foundation::NSString>()
     };
 
     // [NSBundle bundleWithURL:url] → NSBundle*
     let ns_bundle_class = objc2::class!(NSBundle);
-    let bundle: *mut AnyObject = unsafe {
-        msg_send![ns_bundle_class, bundleWithURL: bundle_url_ns]
-    };
+    let bundle: *mut AnyObject =
+        unsafe { msg_send![ns_bundle_class, bundleWithURL: bundle_url_ns] };
     if bundle.is_null() {
         return Err(Error::Other("NSBundle bundleWithURL: returned nil".into()));
     }
     // [bundle classNamed:name] → Class
-    let view_factory_class: *mut objc2::runtime::AnyClass = unsafe {
-        msg_send![bundle, classNamed: class_name_ns]
-    };
+    let view_factory_class: *mut objc2::runtime::AnyClass =
+        unsafe { msg_send![bundle, classNamed: class_name_ns] };
     if view_factory_class.is_null() {
         return Err(Error::Other(format!(
             "view factory class not found in bundle: {}",
@@ -1374,8 +1382,7 @@ unsafe fn subtree_extent(view: &objc2_app_kit::NSView) -> (f64, f64) {
     use objc2::msg_send;
     use objc2_foundation::{NSArray, NSRect};
 
-    let subviews: *mut NSArray<objc2_app_kit::NSView> =
-        unsafe { msg_send![view, subviews] };
+    let subviews: *mut NSArray<objc2_app_kit::NSView> = unsafe { msg_send![view, subviews] };
     if subviews.is_null() {
         return (0.0, 0.0);
     }
@@ -1383,8 +1390,7 @@ unsafe fn subtree_extent(view: &objc2_app_kit::NSView) -> (f64, f64) {
     let mut max_x = 0.0_f64;
     let mut max_y = 0.0_f64;
     for i in 0..count {
-        let sub: *mut objc2_app_kit::NSView =
-            unsafe { msg_send![subviews, objectAtIndex: i] };
+        let sub: *mut objc2_app_kit::NSView = unsafe { msg_send![subviews, objectAtIndex: i] };
         if sub.is_null() {
             continue;
         }
@@ -1454,15 +1460,17 @@ impl Plugin<f32> for AuPlugin {
         // tail; the Vec is heap-allocated to 8-byte alignment via
         // the global allocator, which suffices for AudioBufferList.
         #[allow(clippy::cast_ptr_alignment)]
-        let list_ptr = self.output_buffer_storage.as_mut_ptr().cast::<AudioBufferList>();
+        let list_ptr = self
+            .output_buffer_storage
+            .as_mut_ptr()
+            .cast::<AudioBufferList>();
         unsafe {
             (*list_ptr).mNumberBuffers = self.output_channels;
             let buffers_start: *mut CAAudioBuffer = (*list_ptr).mBuffers.as_mut_ptr();
             for ch in 0..self.output_channels as usize {
                 let buf = &mut *buffers_start.add(ch);
                 buf.mNumberChannels = 1;
-                buf.mDataByteSize =
-                    u32::try_from(frames * std::mem::size_of::<f32>()).unwrap_or(0);
+                buf.mDataByteSize = u32::try_from(frames * std::mem::size_of::<f32>()).unwrap_or(0);
                 buf.mData = main_outputs
                     .get_mut(ch)
                     .map_or(ptr::null_mut(), |c| c.as_mut_ptr().cast());

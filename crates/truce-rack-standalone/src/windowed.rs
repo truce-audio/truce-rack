@@ -65,7 +65,9 @@ where
         let mut guard = plugin.lock().expect("fresh mutex");
         if guard.editor().is_none() {
             drop(guard);
-            eprintln!("[truce-rack-standalone] plugin '{plugin_name}' has no editor — running headless");
+            eprintln!(
+                "[truce-rack-standalone] plugin '{plugin_name}' has no editor — running headless"
+            );
             return match Arc::try_unwrap(plugin) {
                 Ok(mutex) => crate::run_with_plugin(
                     mutex

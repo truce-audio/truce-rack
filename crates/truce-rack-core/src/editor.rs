@@ -15,7 +15,7 @@
 //! thread. The host application is responsible for serialising
 //! the two — never invoke editor methods while the audio thread
 //! holds a `&mut PluginCore`. Rust's borrow rules enforce this
-//! because [`PluginCore::editor`] borrows `&mut self`.
+//! because [`crate::PluginCore::editor`] borrows `&mut self`.
 //!
 //! # Platform handles
 //!
@@ -53,7 +53,7 @@ pub enum WindowHandle {
 
 /// Editor-side view of a hosted plugin's UI.
 ///
-/// Created by [`PluginCore::editor`] when a plugin reports a
+/// Created by [`crate::PluginCore::editor`] when a plugin reports a
 /// custom editor (its format-specific GUI extension is present
 /// and `is_api_supported` returns true for the platform's API).
 /// Methods correspond to the union of `clap.gui`, AU's

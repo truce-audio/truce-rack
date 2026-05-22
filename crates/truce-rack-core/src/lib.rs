@@ -26,7 +26,7 @@
 //! | `ProcessContext`      | [`ProcessContext`]     |
 //! | `BusLayout`           | [`BusLayout`]          |
 //! | `PluginInfo`          | [`PluginInfo`]         |
-//! | `wrapper::run_*`      | [`wrapper::run_*`]     |
+//! | `wrapper::run_*`      | [`wrapper`]`::run_*`   |
 //!
 //! A host targeting one format depends on `truce-rack-core` plus that
 //! format's wrapper crate; a multi-format host depends on
