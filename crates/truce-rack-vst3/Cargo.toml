@@ -14,5 +14,15 @@ thiserror = { workspace = true }
 libloading = { workspace = true }
 vst3 = { workspace = true }
 
+# macOS-only: VST3 bundles are CFBundle directories; loading via
+# raw dlopen leaves the bundle un-registered with CoreFoundation,
+# and the plugin's `bundleEntry` crashes when it tries to use
+# CFPlugin / CFBundleGetIdentifier APIs (observed with
+# Surge XT Effects). CFBundle gives bundleEntry the context it
+# expects.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+
 [lints]
 workspace = true
