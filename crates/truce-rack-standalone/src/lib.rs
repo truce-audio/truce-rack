@@ -24,6 +24,7 @@ use truce_rack_core::plugin::{Plugin, PluginCore, ProcessContext};
 
 pub mod midi;
 pub mod midi_queue;
+pub mod transport;
 #[cfg(any(
     feature = "clap",
     feature = "vst3",
@@ -290,6 +291,7 @@ where
     let mut output_buf = vec![vec![0.0f32; max_block]; channels];
     let bus_in = vec![BusRange::new(0, channels)];
     let bus_out = vec![BusRange::new(0, channels)];
+    let mut clock = transport::TransportClock::new();
 
     let stream = device
         .build_output_stream(
@@ -327,7 +329,7 @@ where
                     let mut ctx = ProcessContext {
                         sample_rate,
                         max_block_size: max_block,
-                        transport: None,
+                        transport: clock.next_block(frames, sample_rate),
                         output_events: &mut out_events,
                     };
                     let _ = plugin.process(&mut buffer, &events, &mut ctx);

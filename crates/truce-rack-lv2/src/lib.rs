@@ -49,8 +49,12 @@ use truce_rack_core::events::{Event, EventBody, EventList, MidiData};
 use truce_rack_core::info::{ParameterInfo, PluginCategory, PluginInfo, PresetInfo};
 use truce_rack_core::plugin::{Plugin, PluginCore, ProcessContext, ProcessStatus};
 use truce_rack_core::scanner::PluginScanner;
+use truce_rack_core::transport::TransportInfo;
 
-use lv2_raw::atom::{LV2Atom, LV2AtomEvent, LV2AtomSequence, LV2AtomSequenceBody};
+use lv2_raw::atom::{
+    LV2Atom, LV2AtomEvent, LV2AtomObjectBody, LV2AtomPropertyBody, LV2AtomSequence,
+    LV2AtomSequenceBody,
+};
 use lv2_raw::core::LV2Feature;
 use lv2_raw::ui::{LV2UIControllerRaw, LV2UIDescriptorRaw, LV2UIHandle, LV2UIWidget};
 use lv2_raw::urid::{LV2Urid, LV2UridMap, LV2UridMapHandle};
@@ -697,6 +701,25 @@ enum PortKind {
     Other,
 }
 
+/// URIDs needed to build a `time:Position` object atom, mapped once
+/// at load. The `atom_*` entries are the value types each property
+/// carries; the rest are the `time:` properties themselves.
+#[derive(Clone, Copy)]
+struct TimeUrids {
+    position: LV2Urid,
+    frame: LV2Urid,
+    speed: LV2Urid,
+    bar: LV2Urid,
+    bar_beat: LV2Urid,
+    beats_per_bar: LV2Urid,
+    beat_unit: LV2Urid,
+    bpm: LV2Urid,
+    atom_long: LV2Urid,
+    atom_float: LV2Urid,
+    atom_int: LV2Urid,
+    atom_object: LV2Urid,
+}
+
 /// One loaded LV2 plugin.
 ///
 /// Owns its `World` (lilv data is referenced by pointer from the
@@ -737,6 +760,7 @@ pub struct Lv2Plugin {
     features: Box<Features>,
     midi_event_urid: LV2Urid,
     atom_sequence_urid: LV2Urid,
+    time_urids: TimeUrids,
 
     /// UI metadata captured at load if the plugin advertises a
     /// native UI for this platform. `None` means no editor — the
@@ -797,6 +821,26 @@ impl Lv2Plugin {
             .urid_map
             .map_uri(unsafe { CStr::from_ptr(LV2_ATOM_SEQUENCE_URI.as_ptr().cast()) });
 
+        // URIDs for the host transport (`time:Position`) atom we
+        // inject each block. Mapped once here so process() stays
+        // allocation-free.
+        let map_uri =
+            |uri: &[u8]| features.urid_map.map_uri(unsafe { CStr::from_ptr(uri.as_ptr().cast()) });
+        let time_urids = TimeUrids {
+            position: map_uri(lv2_raw::time::LV2_TIME__POSITION),
+            frame: map_uri(lv2_raw::time::LV2_TIME__FRAME),
+            speed: map_uri(lv2_raw::time::LV2_TIME__SPEED),
+            bar: map_uri(lv2_raw::time::LV2_TIME__BAR),
+            bar_beat: map_uri(lv2_raw::time::LV2_TIME__BARBEAT),
+            beats_per_bar: map_uri(lv2_raw::time::LV2_TIME__BEATSPERBAR),
+            beat_unit: map_uri(lv2_raw::time::LV2_TIME__BEATUNIT),
+            bpm: map_uri(lv2_raw::time::LV2_TIME__BEATSPERMINUTE),
+            atom_long: map_uri(lv2_raw::atom::LV2_ATOM__LONG),
+            atom_float: map_uri(lv2_raw::atom::LV2_ATOM__FLOAT),
+            atom_int: map_uri(lv2_raw::atom::LV2_ATOM__INT),
+            atom_object: map_uri(lv2_raw::atom::LV2_ATOM__OBJECT),
+        };
+
         let layout = audio_layout(audio_in_count, audio_out_count);
 
         let ui_bundle = unsafe { discover_ui(world.ptr, plugin) };
@@ -819,6 +863,7 @@ impl Lv2Plugin {
             features,
             midi_event_urid,
             atom_sequence_urid,
+            time_urids,
             ui_bundle,
             editor: None,
             controller: None,
@@ -841,7 +886,7 @@ impl Lv2Plugin {
         }));
     }
 
-    fn build_midi_sequence(&mut self, events: &EventList) {
+    fn build_midi_sequence(&mut self, events: &EventList, transport: Option<TransportInfo>) {
         let header_size = std::mem::size_of::<LV2AtomSequence>();
         let cap = self.midi_in_buf.len();
         if cap < header_size {
@@ -859,8 +904,16 @@ impl Lv2Plugin {
         };
         seq.body = LV2AtomSequenceBody { unit: 0, pad: 0 };
 
-        let event_header = std::mem::size_of::<LV2AtomEvent>();
         let mut write_off = header_size;
+
+        // Inject a `time:Position` object as the first event (frame
+        // 0) so transport-aware plugins see tempo / grid before any
+        // MIDI. MIDI events follow, also at frame >= 0.
+        if let Some(t) = transport {
+            write_off = unsafe { write_time_position(&self.time_urids, buf, write_off, cap, &t) };
+        }
+
+        let event_header = std::mem::size_of::<LV2AtomEvent>();
         for ev in events {
             let Some((status, d1, d2, len)) = midi_bytes(&ev.body) else {
                 continue;
@@ -908,6 +961,116 @@ impl Lv2Plugin {
         };
         seq.body = LV2AtomSequenceBody { unit: 0, pad: 0 };
     }
+}
+
+/// Upper bound on the bytes one `time:Position` event consumes:
+/// event + object header plus eight 8-byte-aligned properties. Used
+/// to bounds-check once instead of per-property.
+const TIME_POSITION_MAX_BYTES: usize =
+    std::mem::size_of::<LV2AtomEvent>() + std::mem::size_of::<LV2AtomObjectBody>() + 8 * 32;
+
+/// Write one `time:` property (key + typed scalar value) into an
+/// object body at `off`, returning the next 8-byte-aligned offset.
+///
+/// # Safety
+/// `buf + off` must have room for the property header plus `value`
+/// rounded up to 8 bytes; callers guarantee this via a single
+/// up-front [`TIME_POSITION_MAX_BYTES`] check.
+unsafe fn write_property(buf: *mut u8, off: usize, key: LV2Urid, value_type: LV2Urid, value: &[u8]) -> usize {
+    let prop = unsafe { &mut *buf.add(off).cast::<LV2AtomPropertyBody>() };
+    prop.key = key;
+    prop.context = 0;
+    prop.value = LV2Atom {
+        size: u32::try_from(value.len()).unwrap_or(0),
+        mytype: value_type,
+    };
+    let data = unsafe { buf.add(off + std::mem::size_of::<LV2AtomPropertyBody>()) };
+    unsafe { std::ptr::copy_nonoverlapping(value.as_ptr(), data, value.len()) };
+    let total = std::mem::size_of::<LV2AtomPropertyBody>() + value.len();
+    off + ((total + 7) & !7)
+}
+
+/// Write a `time:Position` object event (at frame 0) into the atom
+/// sequence buffer starting at `base`, returning the offset just
+/// past it. Returns `base` unchanged if there isn't room.
+///
+/// # Safety
+/// `buf` must point at a buffer of at least `cap` bytes that is
+/// valid for writes in `[base, cap)` and aligned for atom structs.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss
+)]
+unsafe fn write_time_position(
+    urids: &TimeUrids,
+    buf: *mut u8,
+    base: usize,
+    cap: usize,
+    t: &TransportInfo,
+) -> usize {
+    if base + TIME_POSITION_MAX_BYTES > cap {
+        return base;
+    }
+    let event_header = std::mem::size_of::<LV2AtomEvent>();
+    let obj_body_off = base + event_header;
+
+    // Object body header (id = 0 blank, otype = time:Position).
+    let obj_body = unsafe { &mut *buf.add(obj_body_off).cast::<LV2AtomObjectBody>() };
+    obj_body.id = 0;
+    obj_body.otype = urids.position;
+
+    let mut off = obj_body_off + std::mem::size_of::<LV2AtomObjectBody>();
+
+    // speed: 1.0 while rolling, 0.0 when stopped.
+    let speed: f32 = if t.playing { 1.0 } else { 0.0 };
+    off = unsafe { write_property(buf, off, urids.speed, urids.atom_float, &speed.to_ne_bytes()) };
+
+    if let Some(samples) = t.song_position_samples {
+        off = unsafe { write_property(buf, off, urids.frame, urids.atom_long, &samples.to_ne_bytes()) };
+    }
+    if let Some(tempo) = t.tempo_bpm {
+        let bpm = tempo as f32;
+        off = unsafe { write_property(buf, off, urids.bpm, urids.atom_float, &bpm.to_ne_bytes()) };
+    }
+    if let Some((num, den)) = t.time_signature {
+        let beats_per_bar = num as f32;
+        off = unsafe {
+            write_property(buf, off, urids.beats_per_bar, urids.atom_float, &beats_per_bar.to_ne_bytes())
+        };
+        let beat_unit = den as i32;
+        off = unsafe {
+            write_property(buf, off, urids.beat_unit, urids.atom_int, &beat_unit.to_ne_bytes())
+        };
+
+        // Bar / barBeat need the musical position too.
+        let beats_per_bar_qn = f64::from(num) * 4.0 / f64::from(den.max(1));
+        if let Some(bar_start) = t.bar_start_beats {
+            let bar = (bar_start / beats_per_bar_qn.max(f64::EPSILON)).round() as i64;
+            off = unsafe { write_property(buf, off, urids.bar, urids.atom_long, &bar.to_ne_bytes()) };
+
+            if let Some(beats) = t.song_position_beats {
+                // Quarter notes since the bar, expressed in this
+                // signature's beats (beatUnit per whole note).
+                let bar_beat = ((beats - bar_start) * f64::from(den) / 4.0) as f32;
+                off = unsafe {
+                    write_property(buf, off, urids.bar_beat, urids.atom_float, &bar_beat.to_ne_bytes())
+                };
+            }
+        }
+    }
+
+    // Back-patch the event header now that the object size is known.
+    let object_body_size = off - obj_body_off;
+    let event = unsafe { &mut *buf.add(base).cast::<LV2AtomEvent>() };
+    event.time_in_frames = 0;
+    event.body = LV2Atom {
+        size: object_body_size as u32,
+        mytype: urids.atom_object,
+    };
+
+    // Pad the whole event to the sequence's 8-byte event alignment.
+    (off + 7) & !7
 }
 
 fn audio_layout(in_count: usize, out_count: usize) -> BusLayout {
@@ -1201,7 +1364,9 @@ impl PluginCore for Lv2Plugin {
         // Rough sizing: room for a sequence header plus one max-len
         // MIDI event per frame. Plenty for any sane block.
         let event_slot = std::mem::size_of::<LV2AtomEvent>() + 8;
-        let cap = std::mem::size_of::<LV2AtomSequence>() + max_block_size * event_slot;
+        let cap = std::mem::size_of::<LV2AtomSequence>()
+            + TIME_POSITION_MAX_BYTES
+            + max_block_size * event_slot;
         self.midi_in_buf.resize(cap.max(64), 0);
         self.midi_out_buf.resize(cap.max(64), 0);
 
@@ -1541,8 +1706,9 @@ impl Plugin<f32> for Lv2Plugin {
         }
         let frames = buffer.num_frames();
 
-        // Build the input MIDI atom sequence and reset the output.
-        self.build_midi_sequence(events);
+        // Build the input atom sequence (host transport + MIDI) and
+        // reset the output.
+        self.build_midi_sequence(events, context.transport);
         self.prep_midi_out();
 
         // Take raw pointers for every audio plane up front so the

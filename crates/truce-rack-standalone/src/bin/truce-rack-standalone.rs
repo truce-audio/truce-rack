@@ -25,7 +25,46 @@
 //! - `--gui` — open the plugin's editor in a window (requires the
 //!   `gui` feature).
 
+use truce_rack_standalone::transport::TransportConfig;
 use truce_rack_standalone::{Format, PluginSelector, RunMode, list_plugins};
+
+/// Parse a `<numerator>/<denominator>` time signature like `7/8`.
+fn parse_time_sig(s: &str) -> Option<(u32, u32)> {
+    let (num, den) = s.split_once('/')?;
+    let num: u32 = num.trim().parse().ok()?;
+    let den: u32 = den.trim().parse().ok()?;
+    if num == 0 || den == 0 {
+        return None;
+    }
+    Some((num, den))
+}
+
+/// Parse the `--tempo` / `--time-sig` / `--paused` / `--no-transport`
+/// flags and install the process-wide transport config the audio
+/// thread reads. Exits with status 2 on a malformed `--time-sig`.
+fn install_transport_config(pargs: &mut pico_args::Arguments) {
+    let tempo: Option<f64> = pargs.opt_value_from_str("--tempo").unwrap_or(None);
+    let time_sig: Option<String> = pargs.opt_value_from_str("--time-sig").unwrap_or(None);
+    let paused = pargs.contains("--paused");
+    let no_transport = pargs.contains("--no-transport");
+
+    let mut config = TransportConfig {
+        enabled: !no_transport,
+        playing: !paused,
+        ..TransportConfig::default()
+    };
+    if let Some(bpm) = tempo {
+        config.tempo_bpm = bpm;
+    }
+    if let Some(ts) = time_sig {
+        let Some(sig) = parse_time_sig(&ts) else {
+            eprintln!("error: --time-sig expects <numerator>/<denominator>, got {ts:?}");
+            std::process::exit(2);
+        };
+        config.time_sig = sig;
+    }
+    truce_rack_standalone::transport::set_config(config);
+}
 
 fn main() {
     let mut pargs = pico_args::Arguments::from_env();
@@ -63,6 +102,10 @@ fn main() {
     let name: Option<String> = pargs.opt_value_from_str("--name").unwrap_or(None);
     let seconds: Option<f32> = pargs.opt_value_from_str("--seconds").unwrap_or(None);
     let gui = pargs.contains("--gui");
+
+    // Transport flags. The standalone host has no DAW timeline, so
+    // it synthesizes one (see `truce_rack_standalone::transport`).
+    install_transport_config(&mut pargs);
 
     let leftover = pargs.finish();
     if !leftover.is_empty() {
@@ -139,6 +182,10 @@ OPTIONS:
   --name <substring>  Case-insensitive substring match against name
   --gui               Open the plugin's editor in a window (gui feature)
   --seconds <n>       Run for n seconds then exit (headless only)
+  --tempo <bpm>       Transport tempo in BPM (default: 120)
+  --time-sig <n/d>    Transport time signature (default: 4/4)
+  --paused            Report transport as stopped (position frozen)
+  --no-transport      Report no transport at all to the plugin
   -h, --help          Print this help"
     );
 }

@@ -366,6 +366,7 @@ impl StreamOwner {
 
         let mut input_buf = vec![vec![0.0f32; MAX_BLOCK]; channels];
         let mut output_buf = vec![vec![0.0f32; MAX_BLOCK]; channels];
+        let mut clock = crate::transport::TransportClock::new();
         let plugin_cb = Arc::clone(plugin);
 
         let stream = device
@@ -404,7 +405,7 @@ impl StreamOwner {
                         let mut ctx = ProcessContext {
                             sample_rate,
                             max_block_size: MAX_BLOCK,
-                            transport: None,
+                            transport: clock.next_block(frames, sample_rate),
                             output_events: &mut out_events,
                         };
                         let _ = guard.process(&mut buffer, &events, &mut ctx);

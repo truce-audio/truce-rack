@@ -30,6 +30,7 @@ use truce_rack_core::events::EventList;
 use truce_rack_core::info::{ParameterInfo, PluginCategory, PluginInfo, PresetInfo};
 use truce_rack_core::plugin::{Plugin, PluginCore, ProcessContext, ProcessStatus};
 use truce_rack_core::scanner::PluginScanner;
+use truce_rack_core::transport::TransportInfo;
 use truce_rack_core::wrapper::run_audio_block_with;
 
 use std::path::{Path, PathBuf};
@@ -40,7 +41,8 @@ use vst3::Steinberg::Vst::{
     IAudioProcessor, IAudioProcessorTrait, IComponent, IComponentTrait, IConnectionPoint,
     IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList, IEventListTrait,
     IParameterChanges, NoteOffEvent, NoteOnEvent, ParameterInfo as Vst3ParameterInfo,
-    ParameterInfo_::ParameterFlags_, PolyPressureEvent, ProcessData, ProcessModes_, ProcessSetup,
+    ParameterInfo_::ParameterFlags_, PolyPressureEvent, ProcessContext as Vst3ProcessContext,
+    ProcessContext_::StatesAndFlags_, ProcessData, ProcessModes_, ProcessSetup,
     SymbolicSampleSizes_, ViewType,
 };
 use vst3::Steinberg::{
@@ -1033,12 +1035,62 @@ fn string128_to_string(buf: &[u16; 128]) -> String {
     String::from_utf16_lossy(&buf[..len])
 }
 
+/// Translate a host [`TransportInfo`] snapshot into Steinberg's
+/// `Vst::ProcessContext`. Only the fields the host reported get
+/// their `k…Valid` flag set; everything else stays zero so the
+/// plugin treats it as absent.
+// `StatesAndFlags` is `c_int` or `c_uint` depending on platform, so
+// the `as u32` casts are only redundant on some targets.
+#[allow(clippy::unnecessary_cast)]
+fn build_vst3_context(t: &TransportInfo, sample_rate: f64) -> Vst3ProcessContext {
+    // SAFETY: ProcessContext is a repr(C) aggregate of integers,
+    // floats, and small POD sub-structs (Chord, FrameRate). An
+    // all-zero value is the valid "no flags set" state; we then
+    // fill in the fields the host actually reported.
+    let mut ctx: Vst3ProcessContext = unsafe { std::mem::zeroed() };
+    ctx.sampleRate = sample_rate;
+
+    let mut state: u32 = 0;
+    if let Some(tempo) = t.tempo_bpm {
+        ctx.tempo = tempo;
+        state |= StatesAndFlags_::kTempoValid as u32;
+    }
+    if let Some((num, den)) = t.time_signature {
+        ctx.timeSigNumerator = i32::try_from(num).unwrap_or(4);
+        ctx.timeSigDenominator = i32::try_from(den).unwrap_or(4);
+        state |= StatesAndFlags_::kTimeSigValid as u32;
+    }
+    if let Some(beats) = t.song_position_beats {
+        // projectTimeMusic is in quarter notes (TQuarterNotes = f64).
+        ctx.projectTimeMusic = beats;
+        state |= StatesAndFlags_::kProjectTimeMusicValid as u32;
+    }
+    if let Some(samples) = t.song_position_samples {
+        ctx.projectTimeSamples = samples;
+    }
+    if let Some(bar) = t.bar_start_beats {
+        ctx.barPositionMusic = bar;
+        state |= StatesAndFlags_::kBarPositionValid as u32;
+    }
+    if t.playing {
+        state |= StatesAndFlags_::kPlaying as u32;
+    }
+    if t.recording {
+        state |= StatesAndFlags_::kRecording as u32;
+    }
+    if t.loop_active {
+        state |= StatesAndFlags_::kCycleActive as u32;
+    }
+    ctx.state = state;
+    ctx
+}
+
 impl Plugin<f32> for Vst3Plugin {
     fn process(
         &mut self,
         buffer: &mut AudioBuffer<'_, f32>,
         events: &EventList,
-        _context: &mut ProcessContext<'_>,
+        context: &mut ProcessContext<'_>,
     ) -> Result<ProcessStatus> {
         if !self.is_active() {
             return Err(Error::NotActivated);
@@ -1084,6 +1136,12 @@ impl Plugin<f32> for Vst3Plugin {
             },
         };
 
+        // Build the transport context up front so its backing
+        // struct outlives the process call.
+        let mut process_context = context
+            .transport
+            .map(|t| build_vst3_context(&t, context.sample_rate));
+
         let mut data = ProcessData {
             #[allow(clippy::cast_possible_wrap)]
             processMode: ProcessModes_::kRealtime as i32,
@@ -1098,7 +1156,9 @@ impl Plugin<f32> for Vst3Plugin {
             outputParameterChanges: ptr::null_mut::<IParameterChanges>(),
             inputEvents: input_events_ptr.as_ptr(),
             outputEvents: output_events_ptr.as_ptr(),
-            processContext: ptr::null_mut(),
+            processContext: process_context
+                .as_mut()
+                .map_or(ptr::null_mut(), std::ptr::from_mut),
         };
 
         let processor_ptr = self.processor.as_ptr();

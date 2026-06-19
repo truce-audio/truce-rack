@@ -24,6 +24,7 @@ use truce_rack_core::error::{Error, Result};
 use truce_rack_core::events::EventList;
 use truce_rack_core::info::{ParameterInfo, PluginCategory, PluginInfo, PresetInfo};
 use truce_rack_core::plugin::{Plugin, PluginCore, ProcessContext, ProcessStatus};
+use truce_rack_core::transport::TransportInfo;
 use truce_rack_core::scanner::PluginScanner;
 use truce_rack_core::wrapper::run_audio_block_with;
 
@@ -31,9 +32,14 @@ use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::{
     CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
-    CLAP_EVENT_PARAM_VALUE, clap_event_header, clap_event_midi, clap_event_note,
-    clap_event_param_value, clap_input_events, clap_output_events,
+    CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT, CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
+    CLAP_TRANSPORT_HAS_SECONDS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
+    CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_LOOP_ACTIVE, CLAP_TRANSPORT_IS_PLAYING,
+    CLAP_TRANSPORT_IS_RECORDING, clap_event_header, clap_event_midi, clap_event_note,
+    clap_event_param_value, clap_event_transport, clap_input_events, clap_output_events,
+    clap_transport_flags,
 };
+use clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR};
 use clap_sys::ext::gui::{
     CLAP_EXT_GUI, CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11,
     clap_plugin_gui, clap_window, clap_window_handle,
@@ -959,6 +965,12 @@ impl Plugin<f32> for ClapPlugin {
         // set_parameter. The resulting Vec backs the
         // ConvertedInputEvents callbacks for the duration of the
         // process call.
+        // Translate the host transport snapshot up front so its
+        // backing struct lives for the whole process call.
+        let transport_event = context
+            .transport
+            .map(|t| build_clap_transport(&t, context.sample_rate));
+
         let mut converted = ConvertedInputEvents::from_rack_events(events);
         for (param_id, value) in self.pending_param_changes.drain(..) {
             converted.push_param_value(0, param_id, value);
@@ -1000,7 +1012,9 @@ impl Plugin<f32> for ClapPlugin {
         let process = clap_process {
             steady_time: self.steady_time,
             frames_count: u32::try_from(num_frames).unwrap_or(u32::MAX),
-            transport: ptr::null(),
+            transport: transport_event
+                .as_ref()
+                .map_or(ptr::null(), std::ptr::from_ref),
             audio_inputs: if input_ptrs.is_empty() {
                 ptr::null()
             } else {
@@ -1033,6 +1047,91 @@ impl Plugin<f32> for ClapPlugin {
             .saturating_add(i64::try_from(num_frames).unwrap_or(0));
 
         Ok(map_clap_status(status))
+    }
+}
+
+/// Translate a host [`TransportInfo`] snapshot into CLAP's
+/// `clap_event_transport`. `sample_rate` converts the sample
+/// position into the seconds timeline CLAP also wants.
+///
+/// CLAP beat / second times are 31.32 fixed-point (see
+/// `CLAP_BEATTIME_FACTOR`); beats are quarter notes.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap
+)]
+fn build_clap_transport(t: &TransportInfo, sample_rate: f64) -> clap_event_transport {
+    let beats_to_fixed = |b: f64| (b * CLAP_BEATTIME_FACTOR as f64).round() as i64;
+    let secs_to_fixed = |s: f64| (s * CLAP_SECTIME_FACTOR as f64).round() as i64;
+
+    let mut flags: clap_transport_flags = 0;
+    let tempo = t.tempo_bpm.unwrap_or(0.0);
+    if t.tempo_bpm.is_some() {
+        flags |= CLAP_TRANSPORT_HAS_TEMPO;
+    }
+    let song_pos_beats = match t.song_position_beats {
+        Some(b) => {
+            flags |= CLAP_TRANSPORT_HAS_BEATS_TIMELINE;
+            beats_to_fixed(b)
+        }
+        None => 0,
+    };
+    let song_pos_seconds = match t.song_position_samples {
+        Some(s) => {
+            flags |= CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
+            secs_to_fixed(s as f64 / sample_rate.max(1.0))
+        }
+        None => 0,
+    };
+    let (tsig_num, tsig_denom) = match t.time_signature {
+        Some((n, d)) => {
+            flags |= CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
+            (n as u16, d as u16)
+        }
+        None => (0, 0),
+    };
+    let bar_start = t.bar_start_beats.map_or(0, beats_to_fixed);
+    // Bar index: bar_start (in quarter notes) divided by the bar
+    // length the time signature implies.
+    let bar_number = match (t.bar_start_beats, t.time_signature) {
+        (Some(bsb), Some((n, d))) => {
+            let beats_per_bar = f64::from(n) * 4.0 / f64::from(d.max(1));
+            (bsb / beats_per_bar.max(f64::EPSILON)).round() as i32
+        }
+        _ => 0,
+    };
+    if t.playing {
+        flags |= CLAP_TRANSPORT_IS_PLAYING;
+    }
+    if t.recording {
+        flags |= CLAP_TRANSPORT_IS_RECORDING;
+    }
+    if t.loop_active {
+        flags |= CLAP_TRANSPORT_IS_LOOP_ACTIVE;
+    }
+
+    clap_event_transport {
+        header: clap_event_header {
+            size: u32::try_from(std::mem::size_of::<clap_event_transport>()).unwrap_or(0),
+            time: 0,
+            space_id: CLAP_CORE_EVENT_SPACE_ID,
+            type_: CLAP_EVENT_TRANSPORT,
+            flags: 0,
+        },
+        flags,
+        song_pos_beats,
+        song_pos_seconds,
+        tempo,
+        tempo_inc: 0.0,
+        loop_start_beats: 0,
+        loop_end_beats: 0,
+        loop_start_seconds: 0,
+        loop_end_seconds: 0,
+        bar_start,
+        bar_number,
+        tsig_num,
+        tsig_denom,
     }
 }
 
