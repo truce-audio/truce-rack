@@ -166,27 +166,19 @@ cargo run --bin truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
 
 # Load one and play it from a MIDI controller + the QWERTY
 # keyboard inside the editor window.
-cargo run --bin truce-rack-standalone --features "gui,vst3,au" -- \
-    --format vst3 --name "Surge XT" --gui
+cargo run --bin truce-rack-standalone --features "gui,vst3,au" -- --format vst3 --name "Surge XT" --gui
 
 # Headless, exit after N seconds — useful for smoke-testing render.
-cargo run --bin truce-rack-standalone --features "au" -- \
-    --format au --name "AUMIDISynth" --seconds 5
+cargo run --bin truce-rack-standalone --features "au" -- --format au --name "AUMIDISynth" --seconds 5
 
 # Drive tempo/grid-synced plugins with a synthesized transport
 # (140 BPM, 7/8). Works in every format.
-cargo run --bin truce-rack-standalone --features "vst3" -- \
-    --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --seconds 5
+cargo run --bin truce-rack-standalone --features "gui,vst3" -- --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --gui
 ```
 
-> **Tip:** `cargo run -q` swallows piped stdout, so `… --list | head`
-> can look empty. Build once and run the binary directly
-> (`cargo build --release --bin truce-rack-standalone --features …`
-> then `target/release/truce-rack-standalone --list`), or drop `-q`.
-
 On macOS add `gui`, `au`, `au3` to the feature list to embed the
-plugin's editor and scan AU plugins. On Linux `gui` is gated off
-(see above); the headless path works.
+plugin's editor and scan AU plugins. On Linux `gui` is gated off;
+the headless path works.
 
 ### Host transport
 
