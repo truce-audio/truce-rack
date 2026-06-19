@@ -3,7 +3,7 @@
 # package that used to share this directory has been deleted;
 # truce-rack is the only tree now.
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/truce-rack",
     "crates/truce-rack-core",
