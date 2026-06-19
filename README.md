@@ -58,6 +58,51 @@ For a granular dependency tree (e.g. you only ever want CLAP and
 don't care about an umbrella crate's resolver churn), depend on
 the per-format crates directly instead.
 
+## Try it standalone
+
+[`truce-rack-standalone`](crates/truce-rack-standalone) is the
+reference host: scans every enabled format, loads one plugin by
+id or name, drives it through cpal, and (with `--gui`) embeds
+its editor in a baseview window. Hardware MIDI input is always
+on (CoreMIDI / WinMM / ALSA via midir).
+
+```bash
+# List every plugin every enabled scanner can find.
+cargo run --bin truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
+
+# Load one and play it from a MIDI controller + the QWERTY
+# keyboard inside the editor window.
+cargo run --bin truce-rack-standalone --features "gui,vst3,au" -- --format vst3 --name "Surge XT" --gui
+
+# Headless, exit after N seconds — useful for smoke-testing render.
+cargo run --bin truce-rack-standalone --features "au" -- --format au --name "AUMIDISynth" --seconds 5
+
+# Drive tempo/grid-synced plugins with a synthesized transport
+# (140 BPM, 7/8). Works in every format.
+cargo run --bin truce-rack-standalone --features "gui,vst3" -- --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --gui
+```
+
+On macOS add `gui`, `au`, `au3` to the feature list to embed the
+plugin's editor and scan AU plugins. On Linux `gui` is gated off;
+the headless path works.
+
+### Host transport
+
+The runner has no DAW timeline, so it synthesizes one and feeds it
+to the plugin every block as host transport (tempo, time signature,
+song position, bar, play state). Each format wrapper translates it
+into the backend's native representation — VST3 `ProcessContext`,
+CLAP `clap_event_transport`, an LV2 `time:Position` atom, and the
+AU host callbacks — so tempo delays, LFO sync, arpeggiators, and
+sequencers behave as they would under a real host.
+
+| Flag             | Default | Meaning                                            |
+| ---------------- | ------- | -------------------------------------------------- |
+| `--tempo <bpm>`  | `120`   | Transport tempo in BPM                             |
+| `--time-sig <n/d>` | `4/4` | Time signature, e.g. `7/8`                         |
+| `--paused`       | rolling | Report transport stopped (song position frozen)    |
+| `--no-transport` | off     | Report no transport at all (`transport == None`)   |
+
 ## Format coverage
 
 | Format | Crate              | Scan | Load | Process | MIDI | GUI |
@@ -151,51 +196,6 @@ To skip LV2:
 ```powershell
 cargo build --bin truce-rack-standalone --no-default-features --features clap,vst3
 ```
-
-## Try it standalone
-
-[`truce-rack-standalone`](crates/truce-rack-standalone) is the
-reference host: scans every enabled format, loads one plugin by
-id or name, drives it through cpal, and (with `--gui`) embeds
-its editor in a baseview window. Hardware MIDI input is always
-on (CoreMIDI / WinMM / ALSA via midir).
-
-```bash
-# List every plugin every enabled scanner can find.
-cargo run --bin truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
-
-# Load one and play it from a MIDI controller + the QWERTY
-# keyboard inside the editor window.
-cargo run --bin truce-rack-standalone --features "gui,vst3,au" -- --format vst3 --name "Surge XT" --gui
-
-# Headless, exit after N seconds — useful for smoke-testing render.
-cargo run --bin truce-rack-standalone --features "au" -- --format au --name "AUMIDISynth" --seconds 5
-
-# Drive tempo/grid-synced plugins with a synthesized transport
-# (140 BPM, 7/8). Works in every format.
-cargo run --bin truce-rack-standalone --features "gui,vst3" -- --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --gui
-```
-
-On macOS add `gui`, `au`, `au3` to the feature list to embed the
-plugin's editor and scan AU plugins. On Linux `gui` is gated off;
-the headless path works.
-
-### Host transport
-
-The runner has no DAW timeline, so it synthesizes one and feeds it
-to the plugin every block as host transport (tempo, time signature,
-song position, bar, play state). Each format wrapper translates it
-into the backend's native representation — VST3 `ProcessContext`,
-CLAP `clap_event_transport`, an LV2 `time:Position` atom, and the
-AU host callbacks — so tempo delays, LFO sync, arpeggiators, and
-sequencers behave as they would under a real host.
-
-| Flag             | Default | Meaning                                            |
-| ---------------- | ------- | -------------------------------------------------- |
-| `--tempo <bpm>`  | `120`   | Transport tempo in BPM                             |
-| `--time-sig <n/d>` | `4/4` | Time signature, e.g. `7/8`                         |
-| `--paused`       | rolling | Report transport stopped (song position frozen)    |
-| `--no-transport` | off     | Report no transport at all (`transport == None`)   |
 
 ## Workspace layout
 
