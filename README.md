@@ -211,6 +211,7 @@ truce-rack/
     ├── truce-rack-au3/     # AU v3 host
     ├── truce-rack-lv2/     # LV2 host (lilv-sys)
     ├── truce-rack-standalone/   # cpal + baseview reference host
+    ├── cargo-rack/         # `cargo rack` subcommand wrapping the standalone host
     └── truce-rack-test/    # assertion helpers for the per-format crates
 ```
 
@@ -224,6 +225,7 @@ truce-rack/
 | [`truce-rack-au3`](crates/truce-rack-au3) | [![crates.io](https://img.shields.io/crates/v/truce-rack-au3.svg)](https://crates.io/crates/truce-rack-au3) | [![docs.rs](https://img.shields.io/badge/docs.rs-blue)](https://docs.rs/truce-rack-au3) |
 | [`truce-rack-lv2`](crates/truce-rack-lv2) | [![crates.io](https://img.shields.io/crates/v/truce-rack-lv2.svg)](https://crates.io/crates/truce-rack-lv2) | [![docs.rs](https://img.shields.io/badge/docs.rs-blue)](https://docs.rs/truce-rack-lv2) |
 | [`truce-rack-standalone`](crates/truce-rack-standalone) | [![crates.io](https://img.shields.io/crates/v/truce-rack-standalone.svg)](https://crates.io/crates/truce-rack-standalone) | [![docs.rs](https://img.shields.io/badge/docs.rs-blue)](https://docs.rs/truce-rack-standalone) |
+| [`cargo-rack`](crates/cargo-rack) | [![crates.io](https://img.shields.io/crates/v/cargo-rack.svg)](https://crates.io/crates/cargo-rack) | [![docs.rs](https://img.shields.io/badge/docs.rs-blue)](https://docs.rs/cargo-rack) |
 | [`truce-rack-test`](crates/truce-rack-test) | [![crates.io](https://img.shields.io/crates/v/truce-rack-test.svg)](https://crates.io/crates/truce-rack-test) | [![docs.rs](https://img.shields.io/badge/docs.rs-blue)](https://docs.rs/truce-rack-test) |
 
 ## Troubleshooting
