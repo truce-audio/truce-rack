@@ -47,7 +47,8 @@ done
 
 # Topological dependency order. core has no internal deps; au3
 # depends on au; standalone + the truce-rack umbrella both depend
-# on every wrapper, so they go last.
+# on every wrapper, so they go late. cargo-rack depends on
+# standalone, so it publishes last.
 CRATES=(
     truce-rack-core
     truce-rack-clap
@@ -58,6 +59,7 @@ CRATES=(
     truce-rack-au3
     truce-rack-standalone
     truce-rack
+    cargo-rack
 )
 
 VERSION=$(awk '
