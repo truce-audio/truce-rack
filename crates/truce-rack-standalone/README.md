@@ -36,6 +36,23 @@ keyboard MIDI handler. Linux gates `gui` off (baseview drags
 `wayland-sys`); the headless path works there. On a `gui` build the
 editor opens by default — pass `--headless` to suppress it.
 
+## Audio device & channels
+
+Playback goes to cpal's default output device at its native rate
+unless you override it:
+
+| Flag                      | Meaning                                          |
+| ------------------------- | ------------------------------------------------ |
+| `--list-devices`          | List audio output + input devices and exit       |
+| `--output <name>`         | Output device (case-insensitive substring)       |
+| `--output-channels <spec>`| `direct` (all, default), a channel like `3`, or a pair `3-4` |
+| `--sample-rate <hz>`      | Output sample rate (falls back if unsupported)   |
+| `--buffer <frames>`       | Audio buffer size in frames                      |
+
+`--output-channels` lets a stereo plugin land on, say, outputs 3-4
+of a multichannel interface (`3` folds it down to a single output).
+The rack host is output-only, so there's no input-device selection.
+
 ## Host transport
 
 There's no DAW timeline behind the runner, so it synthesizes one

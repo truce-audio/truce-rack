@@ -62,14 +62,23 @@ cargo rack --format vst3 --name "Surge XT" --headless --seconds 5
 
 # Drive a tempo/grid-synced plugin with a synthesized transport.
 cargo rack --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8
+
+# Pick an output device + channel pair on a multichannel interface.
+cargo rack --list-devices
+cargo rack --format vst3 --name "Surge XT" --output "Scarlett" --output-channels 3-4
 ```
 
 | Option              | Meaning                                            |
 | ------------------- | -------------------------------------------------- |
 | `--list`            | Print every plugin in every enabled format         |
+| `--list-devices`    | List audio output + input devices and exit         |
 | `--format <fmt>`    | Format to scan (`clap`, `vst3`, `au`, `lv2`)       |
 | `--id <id>`         | Exact unique-id match                              |
 | `--name <substr>`   | Case-insensitive substring match against the name  |
+| `--output <name>`   | Output device (case-insensitive substring)         |
+| `--output-channels <spec>` | `direct` (all), a channel `3`, or a pair `3-4` |
+| `--sample-rate <hz>`| Output sample rate (falls back if unsupported)     |
+| `--buffer <frames>` | Audio buffer size in frames                        |
 | `--headless`        | Run without the editor window                      |
 | `--gui`             | Force the editor window on (default where available) |
 | `--seconds <n>`     | Run headless for n seconds, then exit              |

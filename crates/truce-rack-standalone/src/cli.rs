@@ -8,6 +8,7 @@
 
 use std::ffi::OsString;
 
+use crate::device::{ChannelRoute, DeviceConfig};
 use crate::transport::TransportConfig;
 use crate::{Format, PluginSelector, RunMode, list_plugins};
 
@@ -52,6 +53,11 @@ pub fn run(prog: &str, args: Vec<OsString>) {
         return;
     }
 
+    if pargs.contains("--list-devices") {
+        crate::device::list_devices();
+        return;
+    }
+
     let format_str: String = pargs
         .opt_value_from_str("--format")
         .unwrap_or(None)
@@ -72,6 +78,9 @@ pub fn run(prog: &str, args: Vec<OsString>) {
     } else {
         pargs.contains("--gui") || crate::GUI_AVAILABLE
     };
+
+    // Audio device / channel selection (see `crate::device`).
+    install_device_config(&mut pargs);
 
     // Transport flags. The standalone host has no DAW timeline, so
     // it synthesizes one (see `crate::transport`).
@@ -136,6 +145,39 @@ pub fn run(prog: &str, args: Vec<OsString>) {
     }
 }
 
+/// Parse the audio device / channel flags (`--output`,
+/// `--output-channels`, `--sample-rate`, `--buffer`) and install the
+/// process-wide device config the audio setup reads. Exits with
+/// status 2 on a malformed `--output-channels`.
+fn install_device_config(pargs: &mut pico_args::Arguments) {
+    let output_device: Option<String> = pargs.opt_value_from_str("--output").unwrap_or(None);
+    let output_channels: Option<String> =
+        pargs.opt_value_from_str("--output-channels").unwrap_or(None);
+    let sample_rate: Option<u32> = pargs.opt_value_from_str("--sample-rate").unwrap_or(None);
+    let buffer_size: Option<u32> = pargs.opt_value_from_str("--buffer").unwrap_or(None);
+
+    let output_route = match output_channels {
+        Some(spec) => {
+            let Some(route) = ChannelRoute::parse(&spec) else {
+                eprintln!(
+                    "error: --output-channels expects `direct`, a channel like `3`, \
+                     or a pair like `3-4`, got {spec:?}"
+                );
+                std::process::exit(2);
+            };
+            route
+        }
+        None => ChannelRoute::Direct,
+    };
+
+    crate::device::set_config(DeviceConfig {
+        output_device,
+        output_route,
+        sample_rate,
+        buffer_size,
+    });
+}
+
 /// Parse a `<numerator>/<denominator>` time signature like `7/8`.
 fn parse_time_sig(s: &str) -> Option<(u32, u32)> {
     let (num, den) = s.split_once('/')?;
@@ -180,14 +222,22 @@ fn print_help(prog: &str) {
 
 USAGE:
   {prog} --list
+  {prog} --list-devices
   {prog} --format <clap|vst3|au|lv2> --id <id> [--headless] [--seconds N]
   {prog} --format <clap|vst3|au|lv2> --name <substring> [--headless] [--seconds N]
 
 OPTIONS:
   --list              Print every plugin in every enabled format
+  --list-devices      List audio output + input devices and exit
   --format <fmt>      Format to scan (clap, vst3, au, lv2). Default: clap
   --id <id>           Exact unique-id match
   --name <substring>  Case-insensitive substring match against name
+  --output <name>     Output device (substring match; default: system)
+  --output-channels <spec>
+                      Route output to device channels: `direct` (all,
+                      default), a channel like `3`, or a pair `3-4`
+  --sample-rate <hz>  Output sample rate, e.g. 48000 (default: device)
+  --buffer <frames>   Audio buffer size in frames (default: device)
   --gui               Open the plugin's editor in a window (default
                       on `gui` builds; errors on a non-`gui` build)
   --headless          Run without the editor window

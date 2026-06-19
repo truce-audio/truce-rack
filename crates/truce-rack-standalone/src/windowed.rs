@@ -340,17 +340,12 @@ impl StreamOwner {
     where
         P: PluginCore + Plugin<f32> + Send + 'static,
     {
-        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        use cpal::traits::{DeviceTrait, StreamTrait};
 
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| Error::Other("no default output device".into()))?;
-        let config = device
-            .default_output_config()
-            .map_err(|e| Error::Other(format!("default_output_config: {e}")))?;
-        let sample_rate = f64::from(config.sample_rate().0);
-        let channels = usize::from(config.channels().max(1));
+        let (device, supported) = crate::device::open_output_device()?;
+        let stream_config = crate::device::resolve_stream_config(&device, &supported);
+        let sample_rate = f64::from(stream_config.sample_rate.0);
+        let channels = usize::from(stream_config.channels.max(1));
 
         // Activate under the lock; the audio callback also takes
         // the same lock every block, so the order is: activate →
@@ -360,13 +355,13 @@ impl StreamOwner {
             guard.activate(BusLayout::stereo(), sample_rate, MAX_BLOCK)?;
         }
 
-        let stream_config: cpal::StreamConfig = config.config();
         let bus_in = vec![BusRange::new(0, channels)];
         let bus_out = vec![BusRange::new(0, channels)];
 
         let mut input_buf = vec![vec![0.0f32; MAX_BLOCK]; channels];
         let mut output_buf = vec![vec![0.0f32; MAX_BLOCK]; channels];
         let mut clock = crate::transport::TransportClock::new();
+        let route = crate::device::output_route();
         let plugin_cb = Arc::clone(plugin);
 
         let stream = device
@@ -414,11 +409,7 @@ impl StreamOwner {
                     // emit silence — preferable to glitching from a
                     // half-processed block.
 
-                    for frame in 0..frames {
-                        for ch in 0..channels {
-                            out[frame * channels + ch] = output_buf[ch][frame];
-                        }
-                    }
+                    route.write(out, &output_buf, channels, frames);
                 },
                 move |err| eprintln!("[truce-rack-standalone] stream error: {err}"),
                 None,

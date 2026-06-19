@@ -84,9 +84,15 @@ Or run it straight from a workspace checkout, choosing formats with
 # List every plugin every enabled scanner can find.
 cargo run --bin truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
 
+# List audio output + input devices and exit.
+cargo run --bin truce-rack-standalone --features "vst3" -- --list-devices
+
 # Load one and play it from a MIDI controller + the QWERTY keyboard.
 # On a `gui` build the editor opens by default.
 cargo run --bin truce-rack-standalone --features "gui,vst3,au" -- --format vst3 --name "Surge XT"
+
+# Pick an output device + channel pair on a multichannel interface.
+cargo run --bin truce-rack-standalone --features "vst3" -- --format vst3 --name "Surge XT" --output "Scarlett" --output-channels 3-4
 
 # Headless, exit after N seconds — useful for smoke-testing render.
 cargo run --bin truce-rack-standalone --features "gui,vst3" -- --format vst3 --name "Surge XT" --headless --seconds 5
@@ -100,6 +106,16 @@ On macOS add `gui`, `au`, `au3` to the feature list to embed the
 plugin's editor and scan AU plugins. On Linux `gui` is gated off;
 the headless path works. On a `gui` build the editor opens by
 default — pass `--headless` to run without a window.
+
+### Audio device & channels
+
+The host plays through cpal's default output device at the device's
+native rate. Override any of that from the CLI: `--list-devices`
+prints the available devices, `--output <name>` selects one by
+substring, `--output-channels <spec>` routes the plugin onto
+specific device channels (`direct` for all, `3` for mono on channel
+3, `3-4` for a stereo pair), and `--sample-rate` / `--buffer` set
+the stream format.
 
 ### Host transport
 

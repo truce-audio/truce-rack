@@ -23,6 +23,7 @@ use truce_rack_core::info::PluginInfo;
 use truce_rack_core::plugin::{Plugin, PluginCore, ProcessContext};
 
 pub mod cli;
+pub mod device;
 pub mod midi;
 pub mod midi_queue;
 pub mod transport;
@@ -35,7 +36,7 @@ pub mod transport;
 use truce_rack_core::scanner::PluginScanner;
 
 use cpal::Stream;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 
 #[cfg(feature = "gui")]
 pub mod keyboard;
@@ -248,15 +249,10 @@ pub fn run_with_plugin<P>(plugin: P, mode: RunMode) -> Result<()>
 where
     P: PluginCore + Plugin<f32> + Send + 'static,
 {
-    let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| Error::Other("no default output device".into()))?;
-    let config = device
-        .default_output_config()
-        .map_err(|e| Error::Other(format!("default_output_config: {e}")))?;
-    let sample_rate = f64::from(config.sample_rate().0);
-    let channels = usize::from(config.channels().max(1));
+    let (device, supported) = device::open_output_device()?;
+    let config = device::resolve_stream_config(&device, &supported);
+    let sample_rate = f64::from(config.sample_rate.0);
+    let channels = usize::from(config.channels.max(1));
     let max_block = 1024usize;
 
     let stream = build_audio_stream(plugin, &device, &config, sample_rate, channels, max_block)?;
@@ -283,7 +279,7 @@ where
 fn build_audio_stream<P>(
     mut plugin: P,
     device: &cpal::Device,
-    config: &cpal::SupportedStreamConfig,
+    stream_config: &cpal::StreamConfig,
     sample_rate: f64,
     channels: usize,
     max_block: usize,
@@ -292,13 +288,14 @@ where
     P: PluginCore + Plugin<f32> + Send + 'static,
 {
     plugin.activate(BusLayout::stereo(), sample_rate, max_block)?;
-    let stream_config: cpal::StreamConfig = config.config();
+    let stream_config = stream_config.clone();
 
     let mut input_buf = vec![vec![0.0f32; max_block]; channels];
     let mut output_buf = vec![vec![0.0f32; max_block]; channels];
     let bus_in = vec![BusRange::new(0, channels)];
     let bus_out = vec![BusRange::new(0, channels)];
     let mut clock = transport::TransportClock::new();
+    let route = device::output_route();
 
     let stream = device
         .build_output_stream(
@@ -342,11 +339,7 @@ where
                     let _ = plugin.process(&mut buffer, &events, &mut ctx);
                 }
 
-                for frame in 0..frames {
-                    for ch in 0..channels {
-                        out[frame * channels + ch] = output_buf[ch][frame];
-                    }
-                }
+                route.write(out, &output_buf, channels, frames);
             },
             move |err| eprintln!("[truce-rack-standalone] stream error: {err}"),
             None,
