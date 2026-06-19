@@ -17,7 +17,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.3"
+version = "1.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/truce-audio/truce-rack"
@@ -27,15 +27,15 @@ rust-version = "1.90"
 # `path` is used for in-workspace builds; `version` is what the
 # published crate references on crates.io. `cargo publish` requires
 # a non-path requirement for downstream resolution.
-truce-rack = { path = "crates/truce-rack", version = "1.0.3" }
-truce-rack-core = { path = "crates/truce-rack-core", version = "1.0.3" }
-truce-rack-clap = { path = "crates/truce-rack-clap", version = "1.0.3" }
-truce-rack-vst3 = { path = "crates/truce-rack-vst3", version = "1.0.3" }
-truce-rack-au = { path = "crates/truce-rack-au", version = "1.0.3" }
-truce-rack-au3 = { path = "crates/truce-rack-au3", version = "1.0.3" }
-truce-rack-lv2 = { path = "crates/truce-rack-lv2", version = "1.0.3" }
-truce-rack-standalone = { path = "crates/truce-rack-standalone", version = "1.0.3" }
-truce-rack-test = { path = "crates/truce-rack-test", version = "1.0.3" }
+truce-rack = { path = "crates/truce-rack", version = "1.1.0" }
+truce-rack-core = { path = "crates/truce-rack-core", version = "1.1.0" }
+truce-rack-clap = { path = "crates/truce-rack-clap", version = "1.1.0" }
+truce-rack-vst3 = { path = "crates/truce-rack-vst3", version = "1.1.0" }
+truce-rack-au = { path = "crates/truce-rack-au", version = "1.1.0" }
+truce-rack-au3 = { path = "crates/truce-rack-au3", version = "1.1.0" }
+truce-rack-lv2 = { path = "crates/truce-rack-lv2", version = "1.1.0" }
+truce-rack-standalone = { path = "crates/truce-rack-standalone", version = "1.1.0" }
+truce-rack-test = { path = "crates/truce-rack-test", version = "1.1.0" }
 smallvec = "1.13"
 thiserror = "2.0"
 clap-sys = "0.5"
