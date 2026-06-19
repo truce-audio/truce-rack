@@ -47,18 +47,21 @@ it with `--features lv2` once `lilv` is present.
 
 ## Usage
 
+The plugin's editor opens by default (where the GUI is available);
+pass `--headless` to run without a window.
+
 ```bash
 # List every plugin every enabled scanner can find.
 cargo rack --list
 
-# Load one and open its editor.
-cargo rack --format vst3 --name "Surge XT" --gui
+# Load one — its editor opens automatically.
+cargo rack --format vst3 --name "Surge XT"
 
 # Headless smoke test: render 5 seconds and exit.
-cargo rack --format au --name "AUMIDISynth" --seconds 5
+cargo rack --format vst3 --name "Surge XT" --headless --seconds 5
 
 # Drive a tempo/grid-synced plugin with a synthesized transport.
-cargo rack --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --gui
+cargo rack --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8
 ```
 
 | Option              | Meaning                                            |
@@ -67,7 +70,8 @@ cargo rack --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --gui
 | `--format <fmt>`    | Format to scan (`clap`, `vst3`, `au`, `lv2`)       |
 | `--id <id>`         | Exact unique-id match                              |
 | `--name <substr>`   | Case-insensitive substring match against the name  |
-| `--gui`             | Open the plugin's editor in a window (`gui` feature) |
+| `--headless`        | Run without the editor window                      |
+| `--gui`             | Force the editor window on (default where available) |
 | `--seconds <n>`     | Run headless for n seconds, then exit              |
 | `--tempo <bpm>`     | Transport tempo in BPM (default: 120)              |
 | `--time-sig <n/d>`  | Time signature, e.g. `7/8` (default: 4/4)          |

@@ -16,6 +16,10 @@ use crate::{Format, PluginSelector, RunMode, list_plugins};
 /// `cargo rack`); `args` is argv with the program name (and, for
 /// the cargo subcommand, the leading `rack`) already stripped.
 ///
+/// The editor window opens by default whenever this build can open
+/// one ([`GUI_AVAILABLE`]); pass `--headless` to suppress it, or
+/// `--gui` to request it explicitly (an error on a non-`gui` build).
+///
 /// Exits the process with status 1 on a load/run error and 2 on a
 /// usage error, mirroring the historic binary behavior.
 // With zero format features enabled every match arm becomes
@@ -60,7 +64,14 @@ pub fn run(prog: &str, args: Vec<OsString>) {
     let id: Option<String> = pargs.opt_value_from_str("--id").unwrap_or(None);
     let name: Option<String> = pargs.opt_value_from_str("--name").unwrap_or(None);
     let seconds: Option<f32> = pargs.opt_value_from_str("--seconds").unwrap_or(None);
-    let gui = pargs.contains("--gui");
+    // The editor opens by default on builds that can open one;
+    // `--headless` forces it off, `--gui` forces it on (and errors
+    // on a non-`gui` build).
+    let gui = if pargs.contains("--headless") {
+        false
+    } else {
+        pargs.contains("--gui") || crate::GUI_AVAILABLE
+    };
 
     // Transport flags. The standalone host has no DAW timeline, so
     // it synthesizes one (see `crate::transport`).
@@ -78,8 +89,8 @@ pub fn run(prog: &str, args: Vec<OsString>) {
         (None, None) => {
             eprintln!(
                 "usage: {prog} [--list]\n  \
-                 {prog} --format <clap|vst3|au|lv2> --id <unique-id> [--gui] [--seconds N]\n  \
-                 {prog} --format <clap|vst3|au|lv2> --name <substring> [--gui] [--seconds N]"
+                 {prog} --format <clap|vst3|au|lv2> --id <unique-id> [--headless] [--seconds N]\n  \
+                 {prog} --format <clap|vst3|au|lv2> --name <substring> [--headless] [--seconds N]"
             );
             std::process::exit(2);
         }
@@ -169,15 +180,17 @@ fn print_help(prog: &str) {
 
 USAGE:
   {prog} --list
-  {prog} --format <clap|vst3|au|lv2> --id <id> [--gui] [--seconds N]
-  {prog} --format <clap|vst3|au|lv2> --name <substring> [--gui] [--seconds N]
+  {prog} --format <clap|vst3|au|lv2> --id <id> [--headless] [--seconds N]
+  {prog} --format <clap|vst3|au|lv2> --name <substring> [--headless] [--seconds N]
 
 OPTIONS:
   --list              Print every plugin in every enabled format
   --format <fmt>      Format to scan (clap, vst3, au, lv2). Default: clap
   --id <id>           Exact unique-id match
   --name <substring>  Case-insensitive substring match against name
-  --gui               Open the plugin's editor in a window (gui feature)
+  --gui               Open the plugin's editor in a window (default
+                      on `gui` builds; errors on a non-`gui` build)
+  --headless          Run without the editor window
   --seconds <n>       Run for n seconds then exit (headless only)
   --tempo <bpm>       Transport tempo in BPM (default: 120)
   --time-sig <n/d>    Transport time signature (default: 4/4)

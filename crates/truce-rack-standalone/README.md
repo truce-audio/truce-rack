@@ -22,18 +22,19 @@ embedded as a child. Ships two binaries:
 # Scan everything every enabled format scanner can find.
 cargo run --bin truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
 
-# Load a plugin by name. With --gui, embeds its editor in a window;
-# without --gui, runs headless until SIGINT (or --seconds N).
-cargo run --bin truce-rack-standalone --features "gui,vst3,au" -- --format vst3 --name "Surge XT" --gui
+# Load a plugin by name. On a `gui` build the editor opens by
+# default; pass --headless to run without a window (or --seconds N).
+cargo run --bin truce-rack-standalone --features "gui,vst3,au" -- --format vst3 --name "Surge XT"
 
 # Drive a tempo/grid-synced plugin with a synthesized transport.
-cargo run --bin truce-rack-standalone --features "gui,vst3" -- --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --gui
+cargo run --bin truce-rack-standalone --features "gui,vst3" -- --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8
 ```
 
 Default features are `clap` only; opt in to `vst3`, `au`, `au3`,
 `lv2` as needed. The `gui` feature pulls baseview + the QWERTY
 keyboard MIDI handler. Linux gates `gui` off (baseview drags
-`wayland-sys`); the headless path works there.
+`wayland-sys`); the headless path works there. On a `gui` build the
+editor opens by default — pass `--headless` to suppress it.
 
 ## Host transport
 

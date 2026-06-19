@@ -66,25 +66,40 @@ id or name, drives it through cpal, and (with `--gui`) embeds
 its editor in a baseview window. Hardware MIDI input is always
 on (CoreMIDI / WinMM / ALSA via midir).
 
+The quickest way in is [`cargo-rack`](crates/cargo-rack), which
+installs it as a `cargo rack` subcommand — every format that builds
+on your OS, no clone required:
+
+```bash
+cargo install cargo-rack          # add `--features lv2` for LV2
+cargo rack --list
+# Editor opens by default; add `--headless` to run without a window.
+cargo rack --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8
+```
+
+Or run it straight from a workspace checkout, choosing formats with
+`--features`:
+
 ```bash
 # List every plugin every enabled scanner can find.
 cargo run --bin truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
 
-# Load one and play it from a MIDI controller + the QWERTY
-# keyboard inside the editor window.
-cargo run --bin truce-rack-standalone --features "gui,vst3,au" -- --format vst3 --name "Surge XT" --gui
+# Load one and play it from a MIDI controller + the QWERTY keyboard.
+# On a `gui` build the editor opens by default.
+cargo run --bin truce-rack-standalone --features "gui,vst3,au" -- --format vst3 --name "Surge XT"
 
 # Headless, exit after N seconds — useful for smoke-testing render.
-cargo run --bin truce-rack-standalone --features "au" -- --format au --name "AUMIDISynth" --seconds 5
+cargo run --bin truce-rack-standalone --features "gui,vst3" -- --format vst3 --name "Surge XT" --headless --seconds 5
 
 # Drive tempo/grid-synced plugins with a synthesized transport
 # (140 BPM, 7/8). Works in every format.
-cargo run --bin truce-rack-standalone --features "gui,vst3" -- --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --gui
+cargo run --bin truce-rack-standalone --features "gui,vst3" -- --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8
 ```
 
 On macOS add `gui`, `au`, `au3` to the feature list to embed the
 plugin's editor and scan AU plugins. On Linux `gui` is gated off;
-the headless path works.
+the headless path works. On a `gui` build the editor opens by
+default — pass `--headless` to run without a window.
 
 ### Host transport
 

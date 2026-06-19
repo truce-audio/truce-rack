@@ -16,8 +16,10 @@
 //!   plugin name. One of `--id` / `--name` is required (unless
 //!   `--list` is set).
 //! - `--seconds <n>` — run for n seconds then exit (headless only).
-//! - `--gui` — open the plugin's editor in a window (requires the
-//!   `gui` feature).
+//! - `--gui` / `--headless` — show or hide the plugin's editor
+//!   window. On a `gui` build the editor opens by default; pass
+//!   `--headless` to suppress it. `--gui` on a non-`gui` build is an
+//!   error.
 //! - `--tempo` / `--time-sig` / `--paused` / `--no-transport` —
 //!   shape the synthesized host transport.
 

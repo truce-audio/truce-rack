@@ -48,6 +48,12 @@ pub mod menu_macos;
 #[cfg(target_os = "macos")]
 pub mod screenshot;
 
+/// Whether this build can open a plugin editor window — i.e. the
+/// `gui` feature is compiled in. `false` on Linux (baseview's Linux
+/// backend is gated off) and on any `--no-default-features` build.
+/// Callers use it to decide whether `--gui` can be the default.
+pub const GUI_AVAILABLE: bool = cfg!(feature = "gui");
+
 /// What the standalone runner wants to do once it has a stream
 /// open: stay alive for `seconds`, or block until a user sends
 /// SIGINT.
