@@ -1,0 +1,29 @@
+[package]
+name = "cargo-rack"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Cargo subcommand that runs the truce-rack standalone plugin host (`cargo rack`)"
+readme = "README.md"
+
+[[bin]]
+name = "cargo-rack"
+path = "src/main.rs"
+
+# Thin wrapper over the standalone runner's shared CLI. Mirror its
+# feature surface so `cargo install cargo-rack --features …` selects
+# the same formats. `default-features = false` lets a downstream
+# `--no-default-features` actually drop CLAP.
+[dependencies]
+truce-rack-standalone = { workspace = true }
+
+[features]
+default = ["clap"]
+clap = ["truce-rack-standalone/clap"]
+vst3 = ["truce-rack-standalone/vst3"]
+au = ["truce-rack-standalone/au"]
+au3 = ["truce-rack-standalone/au3"]
+lv2 = ["truce-rack-standalone/lv2"]
+gui = ["truce-rack-standalone/gui"]

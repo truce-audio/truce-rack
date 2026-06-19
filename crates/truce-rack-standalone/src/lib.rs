@@ -22,6 +22,7 @@ use truce_rack_core::events::EventList;
 use truce_rack_core::info::PluginInfo;
 use truce_rack_core::plugin::{Plugin, PluginCore, ProcessContext};
 
+pub mod cli;
 pub mod midi;
 pub mod midi_queue;
 pub mod transport;
