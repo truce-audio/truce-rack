@@ -436,7 +436,13 @@ unsafe fn make_menu(title: &str) -> *mut AnyObject {
         let title_ns = NSString::from_str(title);
         let menu: *mut AnyObject = msg_send![class!(NSMenu), alloc];
         let title_ref: &NSString = &title_ns;
-        msg_send![menu, initWithTitle: title_ref]
+        let menu: *mut AnyObject = msg_send![menu, initWithTitle: title_ref];
+        // Drive enabled state ourselves. With AppKit auto-enabling
+        // (the default), an embedded baseview app's unusual responder
+        // chain leaves custom-target items disabled — graying the
+        // whole menu. Items default to enabled, which is what we want.
+        let _: () = msg_send![menu, setAutoenablesItems: false];
+        menu
     }
 }
 
