@@ -12,18 +12,25 @@ readme = "README.md"
 name = "cargo-rack"
 path = "src/main.rs"
 
-# Thin wrapper over the standalone runner's shared CLI. Mirror its
-# feature surface so `cargo install cargo-rack --features …` selects
-# the same formats. `default-features = false` lets a downstream
-# `--no-default-features` actually drop CLAP.
+# Batteries included: enable every format that builds out-of-the-box
+# on the host OS, via target-specific dependency features (a flat
+# `[features] default` can't vary per platform).
+#
+# - clap + vst3: pure Rust, every OS.
+# - au + au3: Apple only.
+# - gui (plugin editor window): macOS + Windows; Linux is excluded
+#   because baseview's Linux backend drags in wayland-sys.
+# - lv2: opt-in (`--features lv2`) since it links the system `lilv`
+#   library, which isn't present by default on any OS.
 [dependencies]
-truce-rack-standalone = { workspace = true }
+truce-rack-standalone = { workspace = true, features = ["clap", "vst3"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+truce-rack-standalone = { workspace = true, features = ["au", "au3", "gui"] }
+
+[target.'cfg(windows)'.dependencies]
+truce-rack-standalone = { workspace = true, features = ["gui"] }
 
 [features]
-default = ["clap"]
-clap = ["truce-rack-standalone/clap"]
-vst3 = ["truce-rack-standalone/vst3"]
-au = ["truce-rack-standalone/au"]
-au3 = ["truce-rack-standalone/au3"]
+# Opt-in extras on top of the per-OS baseline above.
 lv2 = ["truce-rack-standalone/lv2"]
-gui = ["truce-rack-standalone/gui"]

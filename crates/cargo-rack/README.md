@@ -20,16 +20,30 @@ It's a thin wrapper: the entire flag surface is shared with the
 ## Install
 
 ```bash
-# CLAP only (the default).
+# Every format that builds out-of-the-box on your OS.
 cargo install cargo-rack
 
-# Pick the formats you want; add `gui` to embed plugin editors.
-cargo install cargo-rack --features "gui,vst3,au,au3,lv2"
+# Add LV2 (needs the system `lilv` library installed).
+cargo install cargo-rack --features lv2
 ```
 
-Default features are `clap` only; opt into `vst3`, `au`, `au3`,
-`lv2`, and `gui` as needed (mirroring `truce-rack-standalone`).
-Linux gates `gui` off — the headless path works there.
+By default `cargo install cargo-rack` enables every format that
+compiles on the host with no extra system libraries — picked per
+OS so the install never breaks:
+
+| OS      | Formats on by default | Editor GUI |
+| ------- | --------------------- | ---------- |
+| macOS   | CLAP, VST3, AU, AU v3 | ✓          |
+| Windows | CLAP, VST3            | ✓          |
+| Linux   | CLAP, VST3            | — ¹        |
+
+¹ Linux gates the GUI off — baseview's Linux backend drags in
+`wayland-sys`. The headless host still runs.
+
+**LV2** is the one opt-in: it links the system `lilv` library
+(`brew install lilv`, `apt install liblilv-dev`, …), so it's left
+out of the default to keep `cargo install` working everywhere. Add
+it with `--features lv2` once `lilv` is present.
 
 ## Usage
 
