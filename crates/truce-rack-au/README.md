@@ -12,6 +12,12 @@ async `AudioComponentInstantiate` for v3-flagged components),
 audio + MIDI processing, and the AUv2 Cocoa view behind the
 format-agnostic [`truce-rack-core`][core] traits.
 
+Host transport from `ProcessContext::transport` is exposed through
+the AU host callbacks (`kAudioUnitProperty_HostCallbacks` —
+beat/tempo, musical-time, and transport-state procs), which the AU
+queries during `AudioUnitRender` for tempo, time signature, bar
+position, and play / record / cycle state.
+
 [repo]: https://github.com/truce-audio/truce-rack
 [core]: https://crates.io/crates/truce-rack-core
 

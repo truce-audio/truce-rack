@@ -9,7 +9,9 @@ the registry walk to v3-flagged components and forwards loading
 to [`truce-rack-au`][au], which handles both synchronous and
 async (`AudioComponentInstantiate` with a completion block)
 instantiation paths. Once the instance handle is in hand the
-audio + MIDI + editor surface is identical to AUv2.
+audio + MIDI + editor surface is identical to AUv2 — including host
+transport, which flows through the same `kAudioUnitProperty_HostCallbacks`
+procs `truce-rack-au` registers.
 
 [repo]: https://github.com/truce-audio/truce-rack
 [au]: https://crates.io/crates/truce-rack-au

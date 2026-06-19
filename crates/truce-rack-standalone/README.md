@@ -26,12 +26,37 @@ cargo run -p truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
 # without --gui, runs headless until SIGINT (or --seconds N).
 cargo run -p truce-rack-standalone --features "gui,vst3,au" -- \
     --format vst3 --name "Surge XT" --gui
+
+# Drive a tempo/grid-synced plugin with a synthesized transport.
+cargo run -p truce-rack-standalone --features "vst3" -- \
+    --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --seconds 5
 ```
+
+> `cargo run -q` swallows piped stdout — if `--list | head` looks
+> empty, build once and run the binary directly
+> (`cargo build --release -p truce-rack-standalone --features …`
+> then `target/release/truce-rack-standalone --list`), or drop `-q`.
 
 Default features are `clap` only; opt in to `vst3`, `au`, `au3`,
 `lv2` as needed. The `gui` feature pulls baseview + the QWERTY
 keyboard MIDI handler. Linux gates `gui` off (baseview drags
 `wayland-sys`); the headless path works there.
+
+## Host transport
+
+There's no DAW timeline behind the runner, so it synthesizes one
+and passes it to the plugin every block — each format wrapper maps
+it to its native transport (VST3 `ProcessContext`, CLAP
+`clap_event_transport`, LV2 `time:Position`, AU host callbacks).
+Control it with:
+
+| Flag                | Default | Meaning                                          |
+| ------------------- | ------- | ------------------------------------------------ |
+| `--tempo <bpm>`     | `120`   | Transport tempo in BPM                           |
+| `--time-sig <n/d>`  | `4/4`   | Time signature, e.g. `7/8`                       |
+| `--paused`          | rolling | Report transport stopped (song position frozen)  |
+| `--no-transport`    | off     | Report no transport at all (`transport == None`) |
+| `--seconds <n>`     | —       | Run headless for n seconds, then exit            |
 
 ## Companion crates
 

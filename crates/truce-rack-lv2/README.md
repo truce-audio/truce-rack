@@ -10,6 +10,11 @@ processing, and the LV2 UI extension (`CocoaUI` on macOS,
 `WindowsUI` on Windows, `X11UI` on Linux) behind the
 format-agnostic [`truce-rack-core`][core] traits.
 
+Host transport from `ProcessContext::transport` is injected as a
+`time:Position` object atom (speed, frame, BPM, beats-per-bar,
+beat unit, bar, and bar-beat) at the head of the input atom
+sequence each block.
+
 [repo]: https://github.com/truce-audio/truce-rack
 [core]: https://crates.io/crates/truce-rack-core
 

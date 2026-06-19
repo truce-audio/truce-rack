@@ -9,6 +9,11 @@ host framework. Defines the format-agnostic `PluginScanner`,
 per-format wrapper crate adapts plugins into. No FFI — depends on
 nothing platform-specific.
 
+Per-block state flows through `ProcessContext`, including the
+optional `TransportInfo` host transport snapshot (tempo, time
+signature, song position, bar start, play / record / loop state)
+that each wrapper maps onto its backend's native transport.
+
 [repo]: https://github.com/truce-audio/truce-rack
 
 ## Companion crates

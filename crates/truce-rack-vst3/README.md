@@ -9,6 +9,12 @@ no Steinberg SDK submodule, no cmake. Implements scan, load,
 audio + MIDI processing, and the VST3 `IPlugView` GUI behind the
 format-agnostic [`truce-rack-core`][core] traits.
 
+Host transport from `ProcessContext::transport` is translated into
+Steinberg's `Vst::ProcessContext` (tempo, time signature, project
+time in quarter notes / samples, bar position, and the playing /
+recording / cycle flags), so tempo- and grid-synced plugins get a
+usable timeline.
+
 [repo]: https://github.com/truce-audio/truce-rack
 [core]: https://crates.io/crates/truce-rack-core
 [vst3]: https://crates.io/crates/vst3

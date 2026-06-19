@@ -17,6 +17,12 @@ CLAP and VST3 are the cross-platform mainstream formats and ship
 enabled by default. Audio Unit and LV2 are platform-specific
 enough to be opt-in.
 
+Every wrapper forwards host transport from
+`ProcessContext::transport` into its backend's native form (VST3
+`ProcessContext`, CLAP `clap_event_transport`, LV2 `time:Position`,
+AU host callbacks), so tempo- and grid-synced plugins work the same
+across formats.
+
 | Feature | Default | Crate it enables                                           | Platforms |
 | ------- | ------- | ---------------------------------------------------------- | --------- |
 | `clap`  | ✓       | [`truce-rack-clap`](https://crates.io/crates/truce-rack-clap)   | all       |

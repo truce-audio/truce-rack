@@ -172,11 +172,38 @@ cargo run -p truce-rack-standalone --features "gui,vst3,au" -- \
 # Headless, exit after N seconds — useful for smoke-testing render.
 cargo run -p truce-rack-standalone --features "au" -- \
     --format au --name "AUMIDISynth" --seconds 5
+
+# Drive tempo/grid-synced plugins with a synthesized transport
+# (140 BPM, 7/8). Works in every format.
+cargo run -p truce-rack-standalone --features "vst3" -- \
+    --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --seconds 5
 ```
+
+> **Tip:** `cargo run -q` swallows piped stdout, so `… --list | head`
+> can look empty. Build once and run the binary directly
+> (`cargo build --release -p truce-rack-standalone --features …`
+> then `target/release/truce-rack-standalone --list`), or drop `-q`.
 
 On macOS add `gui`, `au`, `au3` to the feature list to embed the
 plugin's editor and scan AU plugins. On Linux `gui` is gated off
 (see above); the headless path works.
+
+### Host transport
+
+The runner has no DAW timeline, so it synthesizes one and feeds it
+to the plugin every block as host transport (tempo, time signature,
+song position, bar, play state). Each format wrapper translates it
+into the backend's native representation — VST3 `ProcessContext`,
+CLAP `clap_event_transport`, an LV2 `time:Position` atom, and the
+AU host callbacks — so tempo delays, LFO sync, arpeggiators, and
+sequencers behave as they would under a real host.
+
+| Flag             | Default | Meaning                                            |
+| ---------------- | ------- | -------------------------------------------------- |
+| `--tempo <bpm>`  | `120`   | Transport tempo in BPM                             |
+| `--time-sig <n/d>` | `4/4` | Time signature, e.g. `7/8`                         |
+| `--paused`       | rolling | Report transport stopped (song position frozen)    |
+| `--no-transport` | off     | Report no transport at all (`transport == None`)   |
 
 ## Workspace layout
 

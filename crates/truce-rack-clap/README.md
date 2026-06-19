@@ -8,6 +8,10 @@ plugin framework. Pure-Rust on top of `clap-sys`. Implements scan,
 load, audio + MIDI processing, and the CLAP GUI extension behind
 the format-agnostic [`truce-rack-core`][core] traits.
 
+Host transport from `ProcessContext::transport` is passed through
+as a `clap_event_transport` (tempo, time signature, beats / seconds
+timeline, bar start, and the playing / recording / loop flags).
+
 [repo]: https://github.com/truce-audio/truce-rack
 [core]: https://crates.io/crates/truce-rack-core
 
