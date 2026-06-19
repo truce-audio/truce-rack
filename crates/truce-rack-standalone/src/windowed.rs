@@ -95,7 +95,7 @@ where
     let _midi_in = crate::midi::MidiInputThread::start();
 
     let window_opts = WindowOpenOptions {
-        title: plugin_name.to_string(),
+        title: plugin_name.clone(),
         size: Size::new(f64::from(initial_size.0), f64::from(initial_size.1)),
         scale: WindowScalePolicy::SystemScaleFactor,
     };

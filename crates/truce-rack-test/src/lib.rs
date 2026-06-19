@@ -132,7 +132,7 @@ pub fn assert_no_nans(rendered: &Rendered) {
 /// If the peak exceeds `bound`.
 pub fn assert_peak_below(rendered: &Rendered, bound: f32) {
     let peak = rendered.peak();
-    assert!(peak <= bound, "rendered peak {peak} exceeds bound {bound}",);
+    assert!(peak <= bound, "rendered peak {peak} exceeds bound {bound}");
 }
 
 /// Round-trip the plugin's saved state: dump → load → dump,
