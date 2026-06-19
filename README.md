@@ -118,7 +118,7 @@ Linux (baseview's Linux backend drags `wayland-sys`); the
 headless path works. To skip LV2 entirely:
 
 ```bash
-cargo build -p truce-rack-standalone --no-default-features --features clap
+cargo build --bin truce-rack-standalone --no-default-features --features clap
 ```
 
 **Fedora / RHEL:**
@@ -149,7 +149,7 @@ cargo build
 To skip LV2:
 
 ```powershell
-cargo build -p truce-rack-standalone --no-default-features --features clap,vst3
+cargo build --bin truce-rack-standalone --no-default-features --features clap,vst3
 ```
 
 ## Try it standalone
@@ -162,26 +162,26 @@ on (CoreMIDI / WinMM / ALSA via midir).
 
 ```bash
 # List every plugin every enabled scanner can find.
-cargo run -p truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
+cargo run --bin truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
 
 # Load one and play it from a MIDI controller + the QWERTY
 # keyboard inside the editor window.
-cargo run -p truce-rack-standalone --features "gui,vst3,au" -- \
+cargo run --bin truce-rack-standalone --features "gui,vst3,au" -- \
     --format vst3 --name "Surge XT" --gui
 
 # Headless, exit after N seconds — useful for smoke-testing render.
-cargo run -p truce-rack-standalone --features "au" -- \
+cargo run --bin truce-rack-standalone --features "au" -- \
     --format au --name "AUMIDISynth" --seconds 5
 
 # Drive tempo/grid-synced plugins with a synthesized transport
 # (140 BPM, 7/8). Works in every format.
-cargo run -p truce-rack-standalone --features "vst3" -- \
+cargo run --bin truce-rack-standalone --features "vst3" -- \
     --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --seconds 5
 ```
 
 > **Tip:** `cargo run -q` swallows piped stdout, so `… --list | head`
 > can look empty. Build once and run the binary directly
-> (`cargo build --release -p truce-rack-standalone --features …`
+> (`cargo build --release --bin truce-rack-standalone --features …`
 > then `target/release/truce-rack-standalone --list`), or drop `-q`.
 
 On macOS add `gui`, `au`, `au3` to the feature list to embed the

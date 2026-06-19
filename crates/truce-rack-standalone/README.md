@@ -20,21 +20,21 @@ embedded as a child. Ships two binaries:
 
 ```bash
 # Scan everything every enabled format scanner can find.
-cargo run -p truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
+cargo run --bin truce-rack-standalone --features "gui,vst3,au,au3,lv2" -- --list
 
 # Load a plugin by name. With --gui, embeds its editor in a window;
 # without --gui, runs headless until SIGINT (or --seconds N).
-cargo run -p truce-rack-standalone --features "gui,vst3,au" -- \
+cargo run --bin truce-rack-standalone --features "gui,vst3,au" -- \
     --format vst3 --name "Surge XT" --gui
 
 # Drive a tempo/grid-synced plugin with a synthesized transport.
-cargo run -p truce-rack-standalone --features "vst3" -- \
+cargo run --bin truce-rack-standalone --features "vst3" -- \
     --format vst3 --name "Surge XT" --tempo 140 --time-sig 7/8 --seconds 5
 ```
 
 > `cargo run -q` swallows piped stdout — if `--list | head` looks
 > empty, build once and run the binary directly
-> (`cargo build --release -p truce-rack-standalone --features …`
+> (`cargo build --release --bin truce-rack-standalone --features …`
 > then `target/release/truce-rack-standalone --list`), or drop `-q`.
 
 Default features are `clap` only; opt in to `vst3`, `au`, `au3`,
