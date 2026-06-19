@@ -122,6 +122,11 @@ opens only the ports matching a substring (default: all), and
 `--midi-channel <spec>` filters to one channel (`omni`/`all` or
 `1`-`16`).
 
+On macOS, the windowed runner (`--gui`) also exposes all of this as
+a live **Settings** menu — Output Device, Output Channels, MIDI
+Input, and MIDI Channel — so you can switch any of them while the
+plugin is running, no restart required.
+
 ### Host transport
 
 The runner has no DAW timeline, so it synthesizes one and feeds it

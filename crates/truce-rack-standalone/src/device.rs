@@ -12,6 +12,7 @@
 //! input bus), so only the *output* side is selectable here.
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait};
 
@@ -55,6 +56,31 @@ impl ChannelRoute {
         }
         let c: usize = s.parse().ok()?;
         (c >= 1).then(|| Self::Mono { base: c - 1 })
+    }
+
+    /// Pack into the `usize` the live-route atomic stores. `Direct`
+    /// is 0 so a zero-initialized atomic decodes to the default.
+    #[must_use]
+    pub fn encode(self) -> usize {
+        match self {
+            Self::Direct => 0,
+            Self::Stereo { base } => 1 + base * 2,
+            Self::Mono { base } => 2 + base * 2,
+        }
+    }
+
+    /// Inverse of [`Self::encode`].
+    #[must_use]
+    pub fn decode(v: usize) -> Self {
+        if v == 0 {
+            return Self::Direct;
+        }
+        let k = v - 1;
+        if k.is_multiple_of(2) {
+            Self::Stereo { base: k / 2 }
+        } else {
+            Self::Mono { base: (k - 1) / 2 }
+        }
     }
 
     /// Write one block of plugin output into the interleaved device
@@ -119,9 +145,17 @@ pub struct DeviceConfig {
 
 static CONFIG: OnceLock<DeviceConfig> = OnceLock::new();
 
+/// Live output channel route, encoded per [`ChannelRoute::encode`].
+/// Read by the audio callback every block and written by the macOS
+/// menu's "Output Channels" submenu, so routing can change without
+/// restarting the stream. Seeded from the CLI in [`set_config`].
+static LIVE_ROUTE: AtomicUsize = AtomicUsize::new(0);
+
 /// Install the process-wide device config. Called once from the CLI
-/// after parsing flags; ignored if called twice.
+/// after parsing flags; ignored if called twice. Also seeds the
+/// live route the audio callback reads.
 pub fn set_config(config: DeviceConfig) {
+    LIVE_ROUTE.store(config.output_route.encode(), Ordering::Relaxed);
     let _ = CONFIG.set(config);
 }
 
@@ -132,10 +166,17 @@ pub fn config() -> DeviceConfig {
     CONFIG.get().cloned().unwrap_or_default()
 }
 
-/// The configured output channel route.
+/// The current (live) output channel route — what the audio
+/// callback applies this block.
 #[must_use]
-pub fn output_route() -> ChannelRoute {
-    config().output_route
+pub fn live_route() -> ChannelRoute {
+    ChannelRoute::decode(LIVE_ROUTE.load(Ordering::Relaxed))
+}
+
+/// Set the live output channel route. Takes effect on the next
+/// audio block; used by the macOS "Output Channels" menu.
+pub fn set_live_route(route: ChannelRoute) {
+    LIVE_ROUTE.store(route.encode(), Ordering::Relaxed);
 }
 
 /// Print available output and input devices (default marked), then
@@ -175,8 +216,19 @@ fn print_device_list(
 /// When no device matches `--output`, or no default output device
 /// exists, or the device's default config can't be queried.
 pub fn open_output_device() -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
+    open_output(config().output_device.as_deref())
+}
+
+/// Open an output device by `name` (case-insensitive substring), or
+/// cpal's default when `name` is `None`, with its default config.
+/// Used both at startup and by the menu's live device switch.
+///
+/// # Errors
+/// When no device matches `name`, no default output device exists,
+/// or the device's default config can't be queried.
+pub fn open_output(name: Option<&str>) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
     let host = cpal::default_host();
-    let device = match config().output_device.as_deref() {
+    let device = match name {
         Some(name) => find_output_device(&host, name)
             .ok_or_else(|| Error::Other(format!("no output device matching {name:?}")))?,
         None => host
@@ -187,6 +239,16 @@ pub fn open_output_device() -> Result<(cpal::Device, cpal::SupportedStreamConfig
         .default_output_config()
         .map_err(|e| Error::Other(format!("default_output_config: {e}")))?;
     Ok((device, supported))
+}
+
+/// Output device names in cpal order, for the menu's device submenu.
+/// Empty if enumeration fails.
+#[must_use]
+pub fn output_device_names() -> Vec<String> {
+    cpal::default_host()
+        .output_devices()
+        .map(|it| it.filter_map(|d| d.name().ok()).collect())
+        .unwrap_or_default()
 }
 
 fn find_output_device(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
@@ -262,5 +324,28 @@ mod tests {
         let mut out = vec![0.0f32; 2]; // 1 frame * 2 device channels
         ChannelRoute::Mono { base: 0 }.write(&mut out, &bufs, 2, 1);
         assert_eq!(out, vec![4.0, 0.0]);
+    }
+
+    #[test]
+    fn encode_decode_roundtrips() {
+        for route in [
+            ChannelRoute::Direct,
+            ChannelRoute::Stereo { base: 0 },
+            ChannelRoute::Stereo { base: 3 },
+            ChannelRoute::Mono { base: 0 },
+            ChannelRoute::Mono { base: 5 },
+        ] {
+            assert_eq!(ChannelRoute::decode(route.encode()), route);
+        }
+        // Zero is the default, so a freshly-zeroed atomic is `Direct`.
+        assert_eq!(ChannelRoute::decode(0), ChannelRoute::Direct);
+    }
+
+    #[test]
+    fn live_route_set_get() {
+        super::set_live_route(ChannelRoute::Stereo { base: 2 });
+        assert_eq!(super::live_route(), ChannelRoute::Stereo { base: 2 });
+        super::set_live_route(ChannelRoute::Direct);
+        assert_eq!(super::live_route(), ChannelRoute::Direct);
     }
 }

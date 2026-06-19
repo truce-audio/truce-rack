@@ -37,6 +37,17 @@ use crate::midi_queue;
 
 const MAX_BLOCK: usize = 1024;
 
+/// Object-safe bundle of the traits the windowed host needs so the
+/// plugin can be type-erased into a [`SharedPlugin`] — that keeps the
+/// audio controller and the macOS menu (which both hold the plugin)
+/// non-generic, so they can live behind a plain pointer.
+pub trait HostPlugin: PluginCore + Plugin<f32> + Send {}
+impl<T: PluginCore + Plugin<f32> + Send> HostPlugin for T {}
+
+/// The plugin shared between the UI thread, the audio callback, and
+/// the macOS menu's live device switching.
+pub(crate) type SharedPlugin = Arc<Mutex<dyn HostPlugin>>;
+
 /// Open a baseview window, embed `plugin`'s editor inside it, and
 /// drive cpal in the background. Blocks until the window closes.
 ///
@@ -49,50 +60,41 @@ const MAX_BLOCK: usize = 1024;
 /// Locks an `Arc<Mutex<P>>` we just created — `expect` only fires
 /// if the mutex was somehow already poisoned, which is impossible
 /// on a fresh allocation.
-pub fn run<P>(plugin: P) -> Result<()>
+pub fn run<P>(mut plugin: P) -> Result<()>
 where
     P: PluginCore + Plugin<f32> + Send + 'static,
 {
-    let plugin = Arc::new(Mutex::new(plugin));
-    let plugin_name = plugin.lock().expect("fresh mutex").info().name.clone();
+    let plugin_name = plugin.info().name.clone();
 
-    // Probe editor presence — if the plugin can't open an editor
-    // we bail to headless. We can't read the real editor size yet
-    // (AU / VST3 require the editor be opened in a parent window
-    // first), so the baseview window starts at a small default and
-    // is resized once the editor reports its true frame.
-    {
-        let mut guard = plugin.lock().expect("fresh mutex");
-        if guard.editor().is_none() {
-            drop(guard);
-            eprintln!(
-                "[truce-rack-standalone] plugin '{plugin_name}' has no editor — running headless"
-            );
-            return match Arc::try_unwrap(plugin) {
-                Ok(mutex) => crate::run_with_plugin(
-                    mutex
-                        .into_inner()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner),
-                    crate::RunMode::UntilSignal,
-                ),
-                Err(_) => Err(Error::Other(
-                    "could not unwrap plugin Arc for headless fallback".into(),
-                )),
-            };
-        }
+    // Probe editor presence on the concrete plugin — if it can't
+    // open an editor there's nothing to window, so bail to headless
+    // before we type-erase it.
+    if plugin.editor().is_none() {
+        eprintln!(
+            "[truce-rack-standalone] plugin '{plugin_name}' has no editor — running headless"
+        );
+        return crate::run_with_plugin(plugin, crate::RunMode::UntilSignal);
     }
+
+    // Type-erase so the audio controller and menu stay non-generic.
+    let plugin: SharedPlugin = Arc::new(Mutex::new(plugin));
     let initial_size = INITIAL_WINDOW;
 
-    // Start the audio stream first so the editor sees a live host
-    // from the get-go. Owns the underlying cpal::Stream; we drop
-    // it explicitly after the window closes.
-    let stream_owner = StreamOwner::start(&plugin)?;
+    // Start audio first so the editor sees a live host immediately.
+    // The controller owns the cpal stream and rebuilds it when the
+    // menu switches output device. Hardware MIDI in is likewise
+    // wrapped in a controller the menu can re-point.
+    let mut audio = AudioController::start(Arc::clone(&plugin))?;
+    let mut midi = crate::midi::MidiController::start();
 
-    // Open every visible hardware MIDI input. None means no ports
-    // available or midir failed to initialise — the runner is still
-    // playable from the QWERTY keyboard. Held for the lifetime of
-    // the window; dropped after we close.
-    let _midi_in = crate::midi::MidiInputThread::start();
+    // Hand the controllers to the macOS menu as raw pointers to
+    // these stack locals — valid for the whole `open_blocking` call
+    // below, which blocks this frame until the window closes.
+    #[cfg(all(target_os = "macos", feature = "gui"))]
+    {
+        let channels = audio.channels();
+        crate::menu_macos::set_controllers(&raw mut audio, &raw mut midi, channels);
+    }
 
     let window_opts = WindowOpenOptions {
         title: plugin_name.clone(),
@@ -106,10 +108,11 @@ where
     Window::open_blocking(window_opts, move |window| {
         let parent = raw_handle_to_plugin_handle(window.raw_window_handle());
 
-        // Install the macOS native menu bar — App + File menu.
+        // Install the macOS native menu bar — App + Settings menus.
         // Has to run on the main thread after baseview has wired up
         // NSApp, which it does as part of opening the window. The
-        // closure builder runs there before the event loop starts.
+        // closure builder runs there before the event loop starts;
+        // the Settings submenus read the controllers registered above.
         #[cfg(all(target_os = "macos", feature = "gui"))]
         crate::menu_macos::install(&plugin_name_for_handler);
 
@@ -151,16 +154,21 @@ where
         }
     });
 
-    // Window closed — close the editor before we drop the audio
-    // stream so the editor sees the parent window tear down in the
-    // right order.
+    // Window closed. Clear the menu's view of the controllers before
+    // they leave scope so a late menu event can't deref freed state,
+    // then close the editor before dropping the audio stream so the
+    // editor sees the parent window tear down in the right order.
+    #[cfg(all(target_os = "macos", feature = "gui"))]
+    crate::menu_macos::clear();
+
     {
         let mut guard = plugin.lock().expect("plugin mutex");
         if let Some(editor) = guard.editor() {
             editor.close();
         }
     }
-    drop(stream_owner);
+    drop(audio);
+    drop(midi);
     Ok(())
 }
 
@@ -177,19 +185,13 @@ fn raw_handle_to_plugin_handle(handle: RwhHandle) -> PluginParent {
     }
 }
 
-struct StandaloneHandler<P>
-where
-    P: PluginCore + Plugin<f32> + Send + 'static,
-{
-    plugin: Arc<Mutex<P>>,
+struct StandaloneHandler {
+    plugin: SharedPlugin,
     plugin_name: String,
     octave_offset: i8,
 }
 
-impl<P> WindowHandler for StandaloneHandler<P>
-where
-    P: PluginCore + Plugin<f32> + Send + 'static,
-{
+impl WindowHandler for StandaloneHandler {
     fn on_frame(&mut self, _window: &mut Window) {
         // Drive the editor's per-frame idle hook. LV2 uses this to
         // tick its `ui:idleInterface`, push host→UI parameter updates,
@@ -209,10 +211,7 @@ where
     }
 }
 
-impl<P> StandaloneHandler<P>
-where
-    P: PluginCore + Plugin<f32> + Send + 'static,
-{
+impl StandaloneHandler {
     fn handle_keyboard(&mut self, kb: &keyboard_types::KeyboardEvent) -> EventStatus {
         // Cmd/Ctrl + S → save state.
         if kb.state == KeyState::Down && kb.code == Code::KeyS && is_mod_pressed(kb.modifiers) {
@@ -330,94 +329,154 @@ fn is_mod_pressed(mods: Modifiers) -> bool {
     }
 }
 
-/// Owns the cpal output stream. Drop closes the stream.
-struct StreamOwner {
-    _stream: cpal::Stream,
+/// Owns the cpal output stream and rebuilds it against a new device
+/// when the menu switches output. Lives on the main thread for the
+/// window's lifetime; dropping it stops the audio thread.
+pub(crate) struct AudioController {
+    plugin: SharedPlugin,
+    /// Current output-device substring (`None` = system default).
+    device_name: Option<String>,
+    /// Device output channel count of the live stream.
+    channels: usize,
+    /// The live stream. Dropped (stopping the audio thread) before a
+    /// rebuild and on teardown.
+    stream: Option<cpal::Stream>,
 }
 
-impl StreamOwner {
-    fn start<P>(plugin: &Arc<Mutex<P>>) -> Result<Self>
-    where
-        P: PluginCore + Plugin<f32> + Send + 'static,
-    {
-        use cpal::traits::{DeviceTrait, StreamTrait};
+impl AudioController {
+    /// Open the CLI-selected (or default) output device, activate
+    /// the plugin, and start streaming.
+    pub(crate) fn start(plugin: SharedPlugin) -> Result<Self> {
+        let mut controller = Self {
+            plugin,
+            device_name: crate::device::config().output_device,
+            channels: 0,
+            stream: None,
+        };
+        controller.rebuild()?;
+        Ok(controller)
+    }
 
-        let (device, supported) = crate::device::open_output_device()?;
+    /// Device output channel count of the current stream — drives how
+    /// many entries the "Output Channels" menu offers.
+    pub(crate) fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// The current output-device substring (`None` = system default).
+    pub(crate) fn device_name(&self) -> Option<&str> {
+        self.device_name.as_deref()
+    }
+
+    /// Switch the output device by substring (`None` = system
+    /// default) and rebuild the stream. On failure the error is
+    /// logged and the controller is left without a stream.
+    pub(crate) fn set_output_device(&mut self, name: Option<String>) {
+        self.device_name = name;
+        if let Err(e) = self.rebuild() {
+            eprintln!("[truce-rack-standalone] output device switch failed: {e}");
+        }
+    }
+
+    /// (Re)open the device and stream. Drops the old stream first so
+    /// the audio thread stops before the plugin is re-activated.
+    fn rebuild(&mut self) -> Result<()> {
+        use cpal::traits::StreamTrait;
+
+        self.stream = None;
+
+        let (device, supported) = crate::device::open_output(self.device_name.as_deref())?;
         let stream_config = crate::device::resolve_stream_config(&device, &supported);
         let sample_rate = f64::from(stream_config.sample_rate.0);
         let channels = usize::from(stream_config.channels.max(1));
+        self.channels = channels;
 
-        // Activate under the lock; the audio callback also takes
-        // the same lock every block, so the order is: activate →
-        // build stream → play.
+        // Re-activate at the (possibly new) device sample rate.
+        // `deactivate` is a no-op when the plugin isn't active, so
+        // this is safe on the first build too.
         {
-            let mut guard = plugin.lock().expect("plugin mutex");
+            let mut guard = self.plugin.lock().expect("plugin mutex");
+            guard.deactivate();
             guard.activate(BusLayout::stereo(), sample_rate, MAX_BLOCK)?;
         }
 
-        let bus_in = vec![BusRange::new(0, channels)];
-        let bus_out = vec![BusRange::new(0, channels)];
-
-        let mut input_buf = vec![vec![0.0f32; MAX_BLOCK]; channels];
-        let mut output_buf = vec![vec![0.0f32; MAX_BLOCK]; channels];
-        let mut clock = crate::transport::TransportClock::new();
-        let route = crate::device::output_route();
-        let plugin_cb = Arc::clone(plugin);
-
-        let stream = device
-            .build_output_stream(
-                &stream_config,
-                move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    let frames = out.len() / channels.max(1);
-
-                    for ch in &mut input_buf {
-                        if ch.len() < frames {
-                            ch.resize(frames, 0.0);
-                        }
-                        for v in &mut ch[..frames] {
-                            *v = 0.0;
-                        }
-                    }
-                    for ch in &mut output_buf {
-                        if ch.len() < frames {
-                            ch.resize(frames, 0.0);
-                        }
-                        for v in &mut ch[..frames] {
-                            *v = 0.0;
-                        }
-                    }
-
-                    let mut events = EventList::default();
-                    midi_queue::drain_into(&mut events);
-
-                    if let Ok(mut guard) = plugin_cb.try_lock() {
-                        let inputs: Vec<&[f32]> = input_buf.iter().map(|c| &c[..frames]).collect();
-                        let mut outputs: Vec<&mut [f32]> =
-                            output_buf.iter_mut().map(|c| &mut c[..frames]).collect();
-                        let mut buffer =
-                            AudioBuffer::new(&inputs, &mut outputs, frames, &bus_in, &bus_out);
-                        let mut out_events = EventList::default();
-                        let mut ctx = ProcessContext {
-                            sample_rate,
-                            max_block_size: MAX_BLOCK,
-                            transport: clock.next_block(frames, sample_rate),
-                            output_events: &mut out_events,
-                        };
-                        let _ = guard.process(&mut buffer, &events, &mut ctx);
-                    }
-                    // If the UI thread held the lock this block we
-                    // emit silence — preferable to glitching from a
-                    // half-processed block.
-
-                    route.write(out, &output_buf, channels, frames);
-                },
-                move |err| eprintln!("[truce-rack-standalone] stream error: {err}"),
-                None,
-            )
-            .map_err(|e| Error::Other(format!("build_output_stream: {e}")))?;
+        let stream =
+            build_shared_stream(&device, &stream_config, Arc::clone(&self.plugin), channels)?;
         stream
             .play()
             .map_err(|e| Error::Other(format!("stream.play: {e}")))?;
-        Ok(Self { _stream: stream })
+        self.stream = Some(stream);
+        Ok(())
     }
+}
+
+/// Build the cpal output stream whose callback drives `plugin`. The
+/// channel route and transport are read live each block, so the menu
+/// can change routing without rebuilding the stream.
+fn build_shared_stream(
+    device: &cpal::Device,
+    stream_config: &cpal::StreamConfig,
+    plugin: SharedPlugin,
+    channels: usize,
+) -> Result<cpal::Stream> {
+    use cpal::traits::DeviceTrait;
+
+    let sample_rate = f64::from(stream_config.sample_rate.0);
+    let bus_in = vec![BusRange::new(0, channels)];
+    let bus_out = vec![BusRange::new(0, channels)];
+    let mut input_buf = vec![vec![0.0f32; MAX_BLOCK]; channels];
+    let mut output_buf = vec![vec![0.0f32; MAX_BLOCK]; channels];
+    let mut clock = crate::transport::TransportClock::new();
+
+    device
+        .build_output_stream(
+            stream_config,
+            move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                let frames = out.len() / channels.max(1);
+
+                for ch in &mut input_buf {
+                    if ch.len() < frames {
+                        ch.resize(frames, 0.0);
+                    }
+                    for v in &mut ch[..frames] {
+                        *v = 0.0;
+                    }
+                }
+                for ch in &mut output_buf {
+                    if ch.len() < frames {
+                        ch.resize(frames, 0.0);
+                    }
+                    for v in &mut ch[..frames] {
+                        *v = 0.0;
+                    }
+                }
+
+                let mut events = EventList::default();
+                midi_queue::drain_into(&mut events);
+
+                if let Ok(mut guard) = plugin.try_lock() {
+                    let inputs: Vec<&[f32]> = input_buf.iter().map(|c| &c[..frames]).collect();
+                    let mut outputs: Vec<&mut [f32]> =
+                        output_buf.iter_mut().map(|c| &mut c[..frames]).collect();
+                    let mut buffer =
+                        AudioBuffer::new(&inputs, &mut outputs, frames, &bus_in, &bus_out);
+                    let mut out_events = EventList::default();
+                    let mut ctx = ProcessContext {
+                        sample_rate,
+                        max_block_size: MAX_BLOCK,
+                        transport: clock.next_block(frames, sample_rate),
+                        output_events: &mut out_events,
+                    };
+                    let _ = guard.process(&mut buffer, &events, &mut ctx);
+                }
+                // If the UI thread held the lock this block we emit
+                // silence — preferable to glitching from a
+                // half-processed block.
+
+                crate::device::live_route().write(out, &output_buf, channels, frames);
+            },
+            move |err| eprintln!("[truce-rack-standalone] stream error: {err}"),
+            None,
+        )
+        .map_err(|e| Error::Other(format!("build_output_stream: {e}")))
 }

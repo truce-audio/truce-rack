@@ -90,6 +90,11 @@ cargo rack --format vst3 --name "Surge XT" --output "Scarlett" --output-channels
 | `--paused`          | Report transport stopped (song position frozen)    |
 | `--no-transport`    | Report no transport at all to the plugin           |
 
+On macOS, the windowed runner adds a native **Settings** menu that
+switches output device, output channels, MIDI input, and MIDI
+channel live — the same choices as the flags above, changeable
+while the plugin runs.
+
 ## License
 
 MIT or Apache-2.0, at your option.

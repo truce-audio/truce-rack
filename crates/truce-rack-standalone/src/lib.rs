@@ -295,7 +295,6 @@ where
     let bus_in = vec![BusRange::new(0, channels)];
     let bus_out = vec![BusRange::new(0, channels)];
     let mut clock = transport::TransportClock::new();
-    let route = device::output_route();
 
     let stream = device
         .build_output_stream(
@@ -339,7 +338,7 @@ where
                     let _ = plugin.process(&mut buffer, &events, &mut ctx);
                 }
 
-                route.write(out, &output_buf, channels, frames);
+                device::live_route().write(out, &output_buf, channels, frames);
             },
             move |err| eprintln!("[truce-rack-standalone] stream error: {err}"),
             None,

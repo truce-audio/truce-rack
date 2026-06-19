@@ -61,6 +61,14 @@ with `--list-midi` (print ports and exit), `--midi-input <name>`
 (`omni`/`all`, the default, or a channel `1`-`16` — channel-voice
 messages on other channels are dropped; clock/sysex always pass).
 
+## Live menu (macOS)
+
+In the windowed runner (`--gui`) on macOS, a native **Settings**
+menu switches the output device, output channel routing, MIDI input
+port, and MIDI channel filter live — the same choices as the CLI
+flags above, but changeable while the plugin runs. Device / port
+lists repopulate each time a submenu opens.
+
 ## Host transport
 
 There's no DAW timeline behind the runner, so it synthesizes one

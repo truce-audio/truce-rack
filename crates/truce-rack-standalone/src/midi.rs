@@ -10,6 +10,7 @@
 //! `WinMM` on Windows, ALSA on Linux.
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use midir::{MidiInput, MidiInputConnection, MidiInputPort};
 
@@ -55,7 +56,27 @@ impl MidiChannel {
             Self::Only(c) => !(0x80..=0xEF).contains(&status) || (status & 0x0F) == c,
         }
     }
+
+    /// Pack into the live-channel atomic. `Only(0..=15)` stores the
+    /// channel; `Omni` uses the `0x10` sentinel (out of channel
+    /// range) so a zeroed atomic is *not* mistaken for omni.
+    #[must_use]
+    fn encode(self) -> u8 {
+        match self {
+            Self::Omni => OMNI,
+            Self::Only(c) => c,
+        }
+    }
+
+    /// Inverse of [`Self::encode`]; anything outside `0..16` is omni.
+    #[must_use]
+    fn decode(v: u8) -> Self {
+        if v < 16 { Self::Only(v) } else { Self::Omni }
+    }
 }
+
+/// `live_channel` sentinel meaning "accept every channel".
+const OMNI: u8 = 0x10;
 
 /// MIDI input selection resolved from the CLI, read once when the
 /// input thread starts.
@@ -70,9 +91,16 @@ pub struct MidiConfig {
 
 static CONFIG: OnceLock<MidiConfig> = OnceLock::new();
 
+/// Live channel filter, encoded per [`MidiChannel::encode`]. Read in
+/// the midir callback for every message and written by the macOS
+/// "MIDI Channel" submenu, so the filter changes without reopening
+/// ports. Seeded from the CLI in [`set_config`].
+static LIVE_CHANNEL: AtomicU8 = AtomicU8::new(OMNI);
+
 /// Install the process-wide MIDI config. Called once from the CLI;
-/// ignored if called twice.
+/// ignored if called twice. Also seeds the live channel filter.
 pub fn set_config(config: MidiConfig) {
+    LIVE_CHANNEL.store(config.channel.encode(), Ordering::Relaxed);
     let _ = CONFIG.set(config);
 }
 
@@ -80,6 +108,18 @@ pub fn set_config(config: MidiConfig) {
 #[must_use]
 pub fn config() -> MidiConfig {
     CONFIG.get().cloned().unwrap_or_default()
+}
+
+/// The current (live) channel filter applied to incoming messages.
+#[must_use]
+pub fn live_channel() -> MidiChannel {
+    MidiChannel::decode(LIVE_CHANNEL.load(Ordering::Relaxed))
+}
+
+/// Set the live channel filter. Takes effect on the next incoming
+/// message; used by the macOS "MIDI Channel" menu.
+pub fn set_live_channel(channel: MidiChannel) {
+    LIVE_CHANNEL.store(channel.encode(), Ordering::Relaxed);
 }
 
 /// Print available MIDI input ports, then return. Backs
@@ -119,13 +159,20 @@ pub struct MidiInputThread {
 
 impl MidiInputThread {
     /// Open MIDI input ports per the installed [`config`] — every
-    /// visible port, or only those matching `--midi-input`, with the
-    /// `--midi-channel` filter applied. Returns `None` if midir can't
-    /// initialize, no ports are present, or none match the requested
-    /// name — the caller keeps going without hardware MIDI either way.
+    /// visible port, or only those matching `--midi-input`. Returns
+    /// `None` if midir can't initialize, no ports are present, or
+    /// none match — the caller keeps going without hardware MIDI.
     #[must_use]
     pub fn start() -> Option<Self> {
-        let cfg = config();
+        Self::open(config().input.as_deref())
+    }
+
+    /// Open every port whose name contains `input` (or every port
+    /// when `input` is `None`). The channel filter is read live from
+    /// [`live_channel`] in each callback, so changing the channel
+    /// needs no reopen — only a device change rebuilds connections.
+    #[must_use]
+    pub fn open(input: Option<&str>) -> Option<Self> {
         let probe = match MidiInput::new("truce-rack-standalone") {
             Ok(m) => m,
             Err(e) => {
@@ -134,7 +181,7 @@ impl MidiInputThread {
             }
         };
         let mut ports = probe.ports();
-        if let Some(want) = cfg.input.as_deref() {
+        if let Some(want) = input {
             let needle = want.to_ascii_lowercase();
             ports.retain(|p| {
                 probe
@@ -163,7 +210,7 @@ impl MidiInputThread {
                 }
             };
             let label = input.port_name(&port).unwrap_or_else(|_| "?".into());
-            match open_port(input, &port, cfg.channel) {
+            match open_port(input, &port) {
                 Ok(conn) => {
                     eprintln!("[truce-rack-standalone] midi in: {label}");
                     connections.push(conn);
@@ -181,18 +228,63 @@ impl MidiInputThread {
     }
 }
 
+/// Live handle for the macOS menu to switch the MIDI input device
+/// and channel filter at runtime. Holds the open connections so they
+/// outlive the window; rebuilds them on a device change.
+pub struct MidiController {
+    thread: Option<MidiInputThread>,
+    /// Current input-device substring (`None` = all ports).
+    input: Option<String>,
+}
+
+impl MidiController {
+    /// Open MIDI input per the CLI config and return a controller.
+    #[must_use]
+    pub fn start() -> Self {
+        let input = config().input;
+        Self {
+            thread: MidiInputThread::open(input.as_deref()),
+            input,
+        }
+    }
+
+    /// The current input-device filter (`None` = all ports).
+    #[must_use]
+    pub fn input(&self) -> Option<&str> {
+        self.input.as_deref()
+    }
+
+    /// Switch the MIDI input device by substring (`None` = all
+    /// ports), reopening connections. The channel filter is
+    /// unaffected — it lives in [`live_channel`].
+    pub fn set_input(&mut self, input: Option<String>) {
+        // Drop the old connections before opening new ones.
+        self.thread = None;
+        self.thread = MidiInputThread::open(input.as_deref());
+        self.input = input;
+    }
+
+    /// Set the live channel filter (no reopen needed).
+    pub fn set_channel(&self, channel: MidiChannel) {
+        set_live_channel(channel);
+    }
+}
+
 fn open_port(
     input: MidiInput,
     port: &MidiInputPort,
-    channel: MidiChannel,
 ) -> std::result::Result<MidiInputConnection<()>, midir::ConnectError<MidiInput>> {
     input.connect(
         port,
         "truce-rack-standalone-in",
-        move |_timestamp_us, bytes, ()| {
-            // Drop channel-voice messages on other channels before
-            // they reach the queue.
-            if bytes.first().is_some_and(|&status| !channel.accepts(status)) {
+        |_timestamp_us, bytes, ()| {
+            // Drop channel-voice messages on filtered-out channels
+            // before they reach the queue. Read live so the menu's
+            // channel choice applies without reopening the port.
+            if bytes
+                .first()
+                .is_some_and(|&status| !live_channel().accepts(status))
+            {
                 return;
             }
             if let Some(body) = parse_midi(bytes) {
@@ -297,5 +389,34 @@ mod tests {
         // Omni accepts everything.
         assert!(MidiChannel::Omni.accepts(0x90));
         assert!(MidiChannel::Omni.accepts(0xF8));
+    }
+
+    #[test]
+    fn encode_decode_roundtrips() {
+        assert_eq!(MidiChannel::decode(MidiChannel::Omni.encode()), MidiChannel::Omni);
+        for c in 0u8..16 {
+            let ch = MidiChannel::Only(c);
+            assert_eq!(MidiChannel::decode(ch.encode()), ch);
+        }
+    }
+
+    #[test]
+    fn live_channel_set_get() {
+        super::set_live_channel(MidiChannel::Only(4));
+        assert_eq!(super::live_channel(), MidiChannel::Only(4));
+        super::set_live_channel(MidiChannel::Omni);
+        assert_eq!(super::live_channel(), MidiChannel::Omni);
+    }
+
+    #[test]
+    fn controller_tracks_input_selection() {
+        // No live MIDI hardware is needed: a non-matching name opens
+        // zero ports, but the controller still records the selection
+        // the menu would show as checked.
+        let mut controller = super::MidiController::start();
+        controller.set_input(Some("nonexistent-port".into()));
+        assert_eq!(controller.input(), Some("nonexistent-port"));
+        controller.set_input(None);
+        assert_eq!(controller.input(), None);
     }
 }
