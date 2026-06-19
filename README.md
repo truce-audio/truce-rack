@@ -117,6 +117,11 @@ specific device channels (`direct` for all, `3` for mono on channel
 3, `3-4` for a stereo pair), and `--sample-rate` / `--buffer` set
 the stream format.
 
+For MIDI: `--list-midi` prints input ports, `--midi-input <name>`
+opens only the ports matching a substring (default: all), and
+`--midi-channel <spec>` filters to one channel (`omni`/`all` or
+`1`-`16`).
+
 ### Host transport
 
 The runner has no DAW timeline, so it synthesizes one and feeds it

@@ -9,6 +9,7 @@
 use std::ffi::OsString;
 
 use crate::device::{ChannelRoute, DeviceConfig};
+use crate::midi::{MidiChannel, MidiConfig};
 use crate::transport::TransportConfig;
 use crate::{Format, PluginSelector, RunMode, list_plugins};
 
@@ -58,6 +59,11 @@ pub fn run(prog: &str, args: Vec<OsString>) {
         return;
     }
 
+    if pargs.contains("--list-midi") {
+        crate::midi::list_midi();
+        return;
+    }
+
     let format_str: String = pargs
         .opt_value_from_str("--format")
         .unwrap_or(None)
@@ -81,6 +87,9 @@ pub fn run(prog: &str, args: Vec<OsString>) {
 
     // Audio device / channel selection (see `crate::device`).
     install_device_config(&mut pargs);
+
+    // MIDI input device + channel filter (see `crate::midi`).
+    install_midi_config(&mut pargs);
 
     // Transport flags. The standalone host has no DAW timeline, so
     // it synthesizes one (see `crate::transport`).
@@ -178,6 +187,29 @@ fn install_device_config(pargs: &mut pico_args::Arguments) {
     });
 }
 
+/// Parse the MIDI flags (`--midi-input`, `--midi-channel`) and
+/// install the process-wide MIDI config the input thread reads.
+/// Exits with status 2 on a malformed `--midi-channel`.
+fn install_midi_config(pargs: &mut pico_args::Arguments) {
+    let input: Option<String> = pargs.opt_value_from_str("--midi-input").unwrap_or(None);
+    let channel_spec: Option<String> = pargs.opt_value_from_str("--midi-channel").unwrap_or(None);
+
+    let channel = match channel_spec {
+        Some(spec) => {
+            let Some(channel) = MidiChannel::parse(&spec) else {
+                eprintln!(
+                    "error: --midi-channel expects `omni`/`all` or a channel 1-16, got {spec:?}"
+                );
+                std::process::exit(2);
+            };
+            channel
+        }
+        None => MidiChannel::Omni,
+    };
+
+    crate::midi::set_config(MidiConfig { input, channel });
+}
+
 /// Parse a `<numerator>/<denominator>` time signature like `7/8`.
 fn parse_time_sig(s: &str) -> Option<(u32, u32)> {
     let (num, den) = s.split_once('/')?;
@@ -222,13 +254,14 @@ fn print_help(prog: &str) {
 
 USAGE:
   {prog} --list
-  {prog} --list-devices
+  {prog} --list-devices | --list-midi
   {prog} --format <clap|vst3|au|lv2> --id <id> [--headless] [--seconds N]
   {prog} --format <clap|vst3|au|lv2> --name <substring> [--headless] [--seconds N]
 
 OPTIONS:
   --list              Print every plugin in every enabled format
   --list-devices      List audio output + input devices and exit
+  --list-midi         List MIDI input devices and exit
   --format <fmt>      Format to scan (clap, vst3, au, lv2). Default: clap
   --id <id>           Exact unique-id match
   --name <substring>  Case-insensitive substring match against name
@@ -238,6 +271,9 @@ OPTIONS:
                       default), a channel like `3`, or a pair `3-4`
   --sample-rate <hz>  Output sample rate, e.g. 48000 (default: device)
   --buffer <frames>   Audio buffer size in frames (default: device)
+  --midi-input <name> MIDI input device (substring; default: all ports)
+  --midi-channel <spec>
+                      MIDI channel filter: `omni` (all, default) or 1-16
   --gui               Open the plugin's editor in a window (default
                       on `gui` builds; errors on a non-`gui` build)
   --headless          Run without the editor window

@@ -53,6 +53,14 @@ unless you override it:
 of a multichannel interface (`3` folds it down to a single output).
 The rack host is output-only, so there's no input-device selection.
 
+## MIDI input
+
+Every visible MIDI input port is opened at startup. Narrow that
+with `--list-midi` (print ports and exit), `--midi-input <name>`
+(open only ports matching a substring), and `--midi-channel <spec>`
+(`omni`/`all`, the default, or a channel `1`-`16` — channel-voice
+messages on other channels are dropped; clock/sysex always pass).
+
 ## Host transport
 
 There's no DAW timeline behind the runner, so it synthesizes one

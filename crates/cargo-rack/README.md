@@ -79,6 +79,9 @@ cargo rack --format vst3 --name "Surge XT" --output "Scarlett" --output-channels
 | `--output-channels <spec>` | `direct` (all), a channel `3`, or a pair `3-4` |
 | `--sample-rate <hz>`| Output sample rate (falls back if unsupported)     |
 | `--buffer <frames>` | Audio buffer size in frames                        |
+| `--list-midi`       | List MIDI input devices and exit                   |
+| `--midi-input <name>` | MIDI input device (substring; default: all ports) |
+| `--midi-channel <spec>` | `omni`/`all` (default) or a channel `1`-`16`   |
 | `--headless`        | Run without the editor window                      |
 | `--gui`             | Force the editor window on (default where available) |
 | `--seconds <n>`     | Run headless for n seconds, then exit              |
