@@ -128,7 +128,7 @@ checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 
 [[package]]
 name = "cargo-rack"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "truce-rack-standalone",
 ]
@@ -1284,7 +1284,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "truce-rack-au",
  "truce-rack-au3",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-au"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "block2",
  "objc2",
@@ -1311,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-au3"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "objc2",
  "objc2-audio-toolbox",
@@ -1324,7 +1324,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-clap"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "clap-sys",
  "libloading",
@@ -1334,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-core"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "bitflags 2.13.0",
  "crossbeam-queue",
@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-lv2"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "libc",
  "libloading",
@@ -1358,7 +1358,7 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-standalone"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "baseview",
  "cpal",
@@ -1381,14 +1381,14 @@ dependencies = [
 
 [[package]]
 name = "truce-rack-test"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "truce-rack-core",
 ]
 
 [[package]]
 name = "truce-rack-vst3"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "core-foundation",
  "core-foundation-sys",
