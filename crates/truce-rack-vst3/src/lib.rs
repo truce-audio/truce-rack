@@ -33,22 +33,30 @@ use truce_rack_core::scanner::PluginScanner;
 use truce_rack_core::transport::TransportInfo;
 use truce_rack_core::wrapper::run_audio_block_with;
 
-use std::path::{Path, PathBuf};
 use std::ptr;
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicI32, Ordering},
+    },
+};
 
 use vst3::Steinberg::Vst::{
-    AudioBusBuffers, AudioBusBuffers__type0, Event, Event_::EventTypes_, Event__type0,
-    IAudioProcessor, IAudioProcessorTrait, IComponent, IComponentTrait, IConnectionPoint,
-    IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList, IEventListTrait,
-    IParameterChanges, NoteOffEvent, NoteOnEvent, ParameterInfo as Vst3ParameterInfo,
-    ParameterInfo_::ParameterFlags_, PolyPressureEvent, ProcessContext as Vst3ProcessContext,
-    ProcessContext_::StatesAndFlags_, ProcessData, ProcessModes_, ProcessSetup,
-    SymbolicSampleSizes_, ViewType,
+    AudioBusBuffers, AudioBusBuffers__type0, BusDirections_, Event, Event_::EventTypes_,
+    Event__type0, IAudioProcessor, IAudioProcessorTrait, IComponent, IComponentHandler,
+    IComponentHandlerTrait, IComponentTrait, IConnectionPoint, IConnectionPointTrait,
+    IEditController, IEditControllerTrait, IEventList, IEventListTrait, IHostApplication,
+    IHostApplicationTrait, IParamValueQueue, IParamValueQueueTrait, IParameterChanges,
+    IParameterChangesTrait, MediaTypes_, NoteOffEvent, NoteOnEvent, ParamID, ParamValue,
+    ParameterInfo as Vst3ParameterInfo, ParameterInfo_::ParameterFlags_, PolyPressureEvent,
+    ProcessContext as Vst3ProcessContext, ProcessContext_::StatesAndFlags_, ProcessData,
+    ProcessModes_, ProcessSetup, RestartFlags_, String128, SymbolicSampleSizes_, ViewType,
 };
 use vst3::Steinberg::{
-    IBStream, IBStreamTrait, IPlugView, IPlugViewTrait, IPluginBaseTrait, IPluginFactory,
-    IPluginFactoryTrait, PClassInfo, PClassInfo_, TUID, ViewRect, kPlatformTypeHWND,
-    kPlatformTypeNSView, kPlatformTypeX11EmbedWindowID, kResultOk, kResultTrue,
+    FUnknown, IBStream, IBStreamTrait, IPlugView, IPlugViewTrait, IPluginBaseTrait, IPluginFactory,
+    IPluginFactoryTrait, PClassInfo, PClassInfo_, TUID, ViewRect, kNotImplemented,
+    kPlatformTypeHWND, kPlatformTypeNSView, kPlatformTypeX11EmbedWindowID, kResultOk, kResultTrue,
 };
 use vst3::{Class, ComPtr, ComWrapper};
 
@@ -101,7 +109,11 @@ impl PluginScanner for Vst3Scanner {
     fn scan_path(&self, path: &Path) -> Result<Vec<PluginInfo>> {
         let mut out = Vec::new();
         if path.exists() {
-            scan_dir_into(path, &mut out);
+            if is_vst3_bundle_path(path) {
+                scan_bundle_into(path, &mut out)?;
+            } else {
+                scan_dir_into(path, &mut out);
+            }
         }
         Ok(out)
     }
@@ -157,6 +169,12 @@ fn scan_dir_into(dir: &Path, out: &mut Vec<PluginInfo>) {
             eprintln!("[truce-rack-vst3] skipping {}: {err}", path.display());
         }
     }
+}
+
+fn is_vst3_bundle_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(VST3_EXTENSION))
 }
 
 fn scan_bundle_into(bundle: &Path, out: &mut Vec<PluginInfo>) -> Result<()> {
@@ -520,6 +538,8 @@ pub struct Vst3Plugin {
 
     // Hold the module open for the lifetime of the instance.
     _module: LoadedModule,
+    _host_context: ComWrapper<HostContext>,
+    host_restart_flags: Arc<AtomicI32>,
     component: ComPtr<IComponent>,
     processor: ComPtr<IAudioProcessor>,
     controller: ComPtr<IEditController>,
@@ -531,7 +551,10 @@ pub struct Vst3Plugin {
     controller_cp: Option<ComPtr<IConnectionPoint>>,
 
     param_count: usize,
+    pending_parameter_changes: Vec<ParameterChange>,
     processing: bool,
+    audio_input_bus_count: i32,
+    audio_output_bus_count: i32,
 
     /// Cached `IPlugView` for the plugin's editor. Created on
     /// `open()`, released on `close()` / Drop.
@@ -543,6 +566,13 @@ impl Vst3Plugin {
     fn load_from(info: &PluginInfo) -> Result<Self> {
         let module = unsafe { LoadedModule::open(&info.path) }?;
         let factory = module.factory()?;
+        let host_restart_flags = Arc::new(AtomicI32::new(0));
+        let host_context = ComWrapper::new(HostContext {
+            restart_flags: Arc::clone(&host_restart_flags),
+        });
+        let host_application = host_context
+            .to_com_ptr::<IHostApplication>()
+            .ok_or_else(|| Error::Other("HostContext missing IHostApplication IID".into()))?;
 
         let cid = hex_to_tuid(&info.unique_id).ok_or_else(|| Error::LoadFailed {
             path: info.path.clone(),
@@ -559,10 +589,9 @@ impl Vst3Plugin {
             })?;
         let component = component_ptr;
 
-        // Initialize the component. Many plugins accept a NULL
-        // context (hosts only need to supply IHostApplication for
-        // plugins that look it up via queryInterface).
-        if unsafe { component.initialize(ptr::null_mut()) } != kResultOk {
+        if unsafe { component.initialize(host_application.as_ptr().cast::<FUnknown>()) }
+            != kResultOk
+        {
             return Err(Error::LoadFailed {
                 path: info.path.clone(),
                 reason: "IComponent::initialize returned non-OK".into(),
@@ -589,7 +618,9 @@ impl Vst3Plugin {
                     path: info.path.clone(),
                     reason: "factory.createInstance(IEditController) returned NULL".into(),
                 })?;
-            if unsafe { ctrl_ptr.initialize(ptr::null_mut()) } != kResultOk {
+            if unsafe { ctrl_ptr.initialize(host_application.as_ptr().cast::<FUnknown>()) }
+                != kResultOk
+            {
                 return Err(Error::LoadFailed {
                     path: info.path.clone(),
                     reason: "IEditController::initialize returned non-OK".into(),
@@ -611,6 +642,17 @@ impl Vst3Plugin {
                 })?;
             (ctrl, false)
         };
+
+        let component_handler = host_context
+            .to_com_ptr::<IComponentHandler>()
+            .ok_or_else(|| Error::Other("HostContext missing IComponentHandler IID".into()))?;
+        let handler_status = unsafe { controller.setComponentHandler(component_handler.as_ptr()) };
+        if handler_status != kResultOk && handler_status != kNotImplemented {
+            return Err(Error::LoadFailed {
+                path: info.path.clone(),
+                reason: format!("IEditController::setComponentHandler returned {handler_status}"),
+            });
+        }
 
         // Optional: connect the two connection points so the
         // plugin's component and controller can talk to each
@@ -642,11 +684,22 @@ impl Vst3Plugin {
         // a heavier-weight host would defer this to first open.)
         info.has_editor = unsafe { create_editor_view(&controller) }.is_some();
 
+        let audio_input_bus_count = unsafe {
+            component.getBusCount(MediaTypes_::kAudio as i32, BusDirections_::kInput as i32)
+        }
+        .max(0);
+        let audio_output_bus_count = unsafe {
+            component.getBusCount(MediaTypes_::kAudio as i32, BusDirections_::kOutput as i32)
+        }
+        .max(0);
+
         Ok(Self {
             info,
             layouts: vec![BusLayout::stereo()],
             active_layout: None,
             _module: module,
+            _host_context: host_context,
+            host_restart_flags,
             component,
             processor,
             controller,
@@ -654,10 +707,103 @@ impl Vst3Plugin {
             component_cp,
             controller_cp,
             param_count,
+            pending_parameter_changes: Vec::new(),
             processing: false,
+            audio_input_bus_count,
+            audio_output_bus_count,
             view: None,
             editor_open: false,
         })
+    }
+
+    /// Restore VST3 preset state from separate component and
+    /// controller chunks.
+    ///
+    /// VST3 `.vstpreset` files can store the audio component state
+    /// (`Comp`) and edit-controller state (`Cont`) separately. The
+    /// generic [`PluginCore::load_state`] method restores only a
+    /// single opaque blob, so hosts that parse `.vstpreset` files can
+    /// use this method to restore both chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the component rejects `component_state`,
+    /// when the controller rejects `component_state` via
+    /// `setComponentState`, or when a supplied `controller_state` is
+    /// rejected by `IEditController::setState`.
+    pub fn load_vst3_preset_state(
+        &mut self,
+        component_state: &[u8],
+        controller_state: Option<&[u8]>,
+    ) -> Result<()> {
+        self.load_component_state(component_state)?;
+        if let Some(controller_state) = controller_state {
+            self.load_controller_state(controller_state)?;
+        }
+        self.queue_changed_parameter_values()?;
+        Ok(())
+    }
+
+    fn load_component_state(&mut self, bytes: &[u8]) -> Result<()> {
+        let component_stream = stream_from_bytes(bytes)?;
+        let status = unsafe { self.component.setState(component_stream.as_ptr()) };
+        if status != kResultOk {
+            return Err(Error::Other(format!(
+                "IComponent::setState returned {status}"
+            )));
+        }
+
+        let controller_stream = stream_from_bytes(bytes)?;
+        let status = unsafe {
+            self.controller
+                .setComponentState(controller_stream.as_ptr())
+        };
+        if status != kResultOk && status != kNotImplemented {
+            return Err(Error::Other(format!(
+                "IEditController::setComponentState returned {status}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn load_controller_state(&mut self, bytes: &[u8]) -> Result<()> {
+        let stream = stream_from_bytes(bytes)?;
+        let status = unsafe { self.controller.setState(stream.as_ptr()) };
+        if status != kResultOk && status != kNotImplemented {
+            return Err(Error::Other(format!(
+                "IEditController::setState returned {status}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn queue_changed_parameter_values(&mut self) -> Result<()> {
+        let flags = self.host_restart_flags.swap(0, Ordering::AcqRel);
+        if flags & RestartFlags_::kParamValuesChanged == 0 {
+            return Ok(());
+        }
+        self.queue_all_parameter_values()
+    }
+
+    fn queue_all_parameter_values(&mut self) -> Result<()> {
+        self.pending_parameter_changes.clear();
+        self.pending_parameter_changes.reserve(self.param_count);
+        for index in 0..self.param_count {
+            let mut info = empty_parameter_info();
+            let i32_index = i32::try_from(index).map_err(|_| Error::InvalidParameter(index))?;
+            if unsafe { self.controller.getParameterInfo(i32_index, &raw mut info) } != kResultOk {
+                return Err(Error::InvalidParameter(index));
+            }
+            let value = unsafe { self.controller.getParamNormalized(info.id) };
+            if value.is_finite() {
+                self.pending_parameter_changes.push(ParameterChange {
+                    id: info.id,
+                    sample_offset: 0,
+                    value,
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -818,20 +964,8 @@ impl PluginCore for Vst3Plugin {
     }
 
     fn load_state(&mut self, bytes: &[u8]) -> Result<()> {
-        let stream = ComWrapper::new(MemoryStream {
-            data: std::cell::RefCell::new(bytes.to_vec()),
-            position: std::cell::Cell::new(0),
-        });
-        let stream_ptr = stream
-            .to_com_ptr::<IBStream>()
-            .ok_or_else(|| Error::Other("MemoryStream missing IBStream IID".into()))?;
-        let status = unsafe { self.component.setState(stream_ptr.as_ptr()) };
-        if status != kResultOk {
-            return Err(Error::Other(format!(
-                "IComponent::setState returned {status}"
-            )));
-        }
-        Ok(())
+        self.load_component_state(bytes)?;
+        self.queue_changed_parameter_values()
     }
 
     fn activate(
@@ -860,10 +994,14 @@ impl PluginCore for Vst3Plugin {
                 "IAudioProcessor::setupProcessing failed".into(),
             ));
         }
+        self.activate_buses(true);
         if unsafe { self.component.setActive(1) } != kResultOk {
+            self.activate_buses(false);
             return Err(Error::Other("IComponent::setActive(true) failed".into()));
         }
         if unsafe { self.processor.setProcessing(1) } != kResultOk {
+            unsafe { self.component.setActive(0) };
+            self.activate_buses(false);
             return Err(Error::Other(
                 "IAudioProcessor::setProcessing(true) failed".into(),
             ));
@@ -881,6 +1019,7 @@ impl PluginCore for Vst3Plugin {
         if self.active_layout.is_some() {
             unsafe { self.component.setActive(0) };
         }
+        self.activate_buses(false);
         self.active_layout = None;
     }
     fn is_active(&self) -> bool {
@@ -892,6 +1031,31 @@ impl PluginCore for Vst3Plugin {
             return None;
         }
         Some(self)
+    }
+}
+
+impl Vst3Plugin {
+    fn activate_buses(&self, active: bool) {
+        let state = if active { 1 } else { 0 };
+        for media_type in [MediaTypes_::kAudio, MediaTypes_::kEvent] {
+            for direction in [BusDirections_::kInput, BusDirections_::kOutput] {
+                let count = unsafe {
+                    self.component
+                        .getBusCount(media_type as i32, direction as i32)
+                }
+                .max(0);
+                for index in 0..count {
+                    unsafe {
+                        self.component.activateBus(
+                            media_type as i32,
+                            direction as i32,
+                            index,
+                            state,
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1124,6 +1288,12 @@ impl Plugin<f32> for Vst3Plugin {
                 channelBuffers32: input_ptrs.as_mut_ptr(),
             },
         };
+        let input_bus_count = if self.audio_input_bus_count > 0 { 1 } else { 0 };
+        let input_bus_ptr = if input_bus_count > 0 {
+            &raw mut input_bus
+        } else {
+            ptr::null_mut()
+        };
 
         let main_outputs = buffer.main_outputs();
         let mut output_ptrs: Vec<*mut f32> =
@@ -1135,12 +1305,37 @@ impl Plugin<f32> for Vst3Plugin {
                 channelBuffers32: output_ptrs.as_mut_ptr(),
             },
         };
+        let output_bus_count = if self.audio_output_bus_count > 0 {
+            1
+        } else {
+            0
+        };
+        let output_bus_ptr = if output_bus_count > 0 {
+            &raw mut output_bus
+        } else {
+            ptr::null_mut()
+        };
 
         // Build the transport context up front so its backing
         // struct outlives the process call.
         let mut process_context = context
             .transport
             .map(|t| build_vst3_context(&t, context.sample_rate));
+        let input_parameter_changes_wrapper = if self.pending_parameter_changes.is_empty() {
+            None
+        } else {
+            Some(ComWrapper::new(ParameterChanges3::new(std::mem::take(
+                &mut self.pending_parameter_changes,
+            ))))
+        };
+        let input_parameter_changes_ptr = input_parameter_changes_wrapper
+            .as_ref()
+            .map(|wrapper| {
+                wrapper.to_com_ptr::<IParameterChanges>().ok_or_else(|| {
+                    Error::Other("ParameterChanges3 missing IParameterChanges IID".into())
+                })
+            })
+            .transpose()?;
 
         let mut data = ProcessData {
             #[allow(clippy::cast_possible_wrap)]
@@ -1148,11 +1343,13 @@ impl Plugin<f32> for Vst3Plugin {
             #[allow(clippy::cast_possible_wrap)]
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             numSamples: i32::try_from(frames).unwrap_or(i32::MAX),
-            numInputs: 1,
-            numOutputs: 1,
-            inputs: &raw mut input_bus,
-            outputs: &raw mut output_bus,
-            inputParameterChanges: ptr::null_mut::<IParameterChanges>(),
+            numInputs: input_bus_count,
+            numOutputs: output_bus_count,
+            inputs: input_bus_ptr,
+            outputs: output_bus_ptr,
+            inputParameterChanges: input_parameter_changes_ptr
+                .as_ref()
+                .map_or(ptr::null_mut::<IParameterChanges>(), ComPtr::as_ptr),
             outputParameterChanges: ptr::null_mut::<IParameterChanges>(),
             inputEvents: input_events_ptr.as_ptr(),
             outputEvents: output_events_ptr.as_ptr(),
@@ -1170,6 +1367,149 @@ impl Plugin<f32> for Vst3Plugin {
         } else {
             Ok(ProcessStatus::Error)
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ParameterChanges3 — in-memory IParameterChanges impl.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct ParameterChange {
+    id: ParamID,
+    sample_offset: i32,
+    value: ParamValue,
+}
+
+#[derive(Clone, Copy)]
+struct ParameterPoint {
+    sample_offset: i32,
+    value: ParamValue,
+}
+
+struct ParameterChanges3 {
+    queues: std::cell::RefCell<Vec<ComPtr<IParamValueQueue>>>,
+}
+
+impl ParameterChanges3 {
+    fn new(changes: Vec<ParameterChange>) -> Self {
+        let queues = changes
+            .into_iter()
+            .map(|change| {
+                ComWrapper::new(ParamValueQueue3 {
+                    id: change.id,
+                    points: std::cell::RefCell::new(vec![ParameterPoint {
+                        sample_offset: change.sample_offset,
+                        value: change.value,
+                    }]),
+                })
+                .to_com_ptr::<IParamValueQueue>()
+                .expect("ParamValueQueue3 must implement IParamValueQueue")
+            })
+            .collect();
+        Self {
+            queues: std::cell::RefCell::new(queues),
+        }
+    }
+}
+
+impl Class for ParameterChanges3 {
+    type Interfaces = (IParameterChanges,);
+}
+
+impl IParameterChangesTrait for ParameterChanges3 {
+    unsafe fn getParameterCount(&self) -> i32 {
+        i32::try_from(self.queues.borrow().len()).unwrap_or(i32::MAX)
+    }
+
+    unsafe fn getParameterData(&self, index: i32) -> *mut IParamValueQueue {
+        if index < 0 {
+            return ptr::null_mut();
+        }
+        self.queues
+            .borrow()
+            .get(index as usize)
+            .map_or(ptr::null_mut(), ComPtr::as_ptr)
+    }
+
+    unsafe fn addParameterData(
+        &self,
+        id: *const ParamID,
+        index: *mut i32,
+    ) -> *mut IParamValueQueue {
+        if id.is_null() {
+            return ptr::null_mut();
+        }
+        let id = unsafe { *id };
+        let queue = ComWrapper::new(ParamValueQueue3 {
+            id,
+            points: std::cell::RefCell::new(Vec::new()),
+        })
+        .to_com_ptr::<IParamValueQueue>()
+        .expect("ParamValueQueue3 must implement IParamValueQueue");
+        let raw = queue.as_ptr();
+        let mut queues = self.queues.borrow_mut();
+        queues.push(queue);
+        if !index.is_null() {
+            unsafe {
+                *index = i32::try_from(queues.len() - 1).unwrap_or(i32::MAX);
+            }
+        }
+        raw
+    }
+}
+
+struct ParamValueQueue3 {
+    id: ParamID,
+    points: std::cell::RefCell<Vec<ParameterPoint>>,
+}
+
+impl Class for ParamValueQueue3 {
+    type Interfaces = (IParamValueQueue,);
+}
+
+impl IParamValueQueueTrait for ParamValueQueue3 {
+    unsafe fn getParameterId(&self) -> ParamID {
+        self.id
+    }
+
+    unsafe fn getPointCount(&self) -> i32 {
+        i32::try_from(self.points.borrow().len()).unwrap_or(i32::MAX)
+    }
+
+    unsafe fn getPoint(&self, index: i32, sample_offset: *mut i32, value: *mut ParamValue) -> i32 {
+        if index < 0 {
+            return -1;
+        }
+        let points = self.points.borrow();
+        let Some(point) = points.get(index as usize) else {
+            return -1;
+        };
+        if !sample_offset.is_null() {
+            unsafe {
+                *sample_offset = point.sample_offset;
+            }
+        }
+        if !value.is_null() {
+            unsafe {
+                *value = point.value;
+            }
+        }
+        kResultOk
+    }
+
+    unsafe fn addPoint(&self, sample_offset: i32, value: ParamValue, index: *mut i32) -> i32 {
+        let mut points = self.points.borrow_mut();
+        points.push(ParameterPoint {
+            sample_offset,
+            value,
+        });
+        if !index.is_null() {
+            unsafe {
+                *index = i32::try_from(points.len() - 1).unwrap_or(i32::MAX);
+            }
+        }
+        kResultOk
     }
 }
 
@@ -1202,7 +1542,7 @@ impl EventBuffer {
                     pitch: 0,
                     tuning: 0.0,
                     velocity: 0.0,
-                    length: 0,
+                    length: -1,
                     noteId: -1,
                 },
             },
@@ -1220,7 +1560,7 @@ impl EventBuffer {
                         pitch: i16::from(note),
                         tuning: 0.0,
                         velocity: f32::from(velocity) / 127.0,
-                        length: 0,
+                        length: -1,
                         noteId: -1,
                     },
                 };
@@ -1308,6 +1648,70 @@ impl IEventListTrait for EventList3 {
 // ---------------------------------------------------------------------------
 // MemoryStream — in-memory IBStream impl for state save/load.
 // ---------------------------------------------------------------------------
+
+fn stream_from_bytes(bytes: &[u8]) -> Result<ComPtr<IBStream>> {
+    ComWrapper::new(MemoryStream {
+        data: std::cell::RefCell::new(bytes.to_vec()),
+        position: std::cell::Cell::new(0),
+    })
+    .to_com_ptr::<IBStream>()
+    .ok_or_else(|| Error::Other("MemoryStream missing IBStream IID".into()))
+}
+
+struct HostContext {
+    restart_flags: Arc<AtomicI32>,
+}
+
+impl Class for HostContext {
+    type Interfaces = (IHostApplication, IComponentHandler);
+}
+
+impl IHostApplicationTrait for HostContext {
+    unsafe fn getName(&self, name: *mut String128) -> i32 {
+        if name.is_null() {
+            return -1;
+        }
+        let out = unsafe { &mut *name };
+        out.fill(0);
+        for (slot, unit) in out.iter_mut().zip("truce-rack".encode_utf16()) {
+            *slot = unit as _;
+        }
+        kResultOk
+    }
+
+    unsafe fn createInstance(
+        &self,
+        _cid: *mut TUID,
+        _iid: *mut TUID,
+        obj: *mut *mut std::ffi::c_void,
+    ) -> i32 {
+        if !obj.is_null() {
+            unsafe {
+                *obj = ptr::null_mut();
+            }
+        }
+        kNotImplemented
+    }
+}
+
+impl IComponentHandlerTrait for HostContext {
+    unsafe fn beginEdit(&self, _id: ParamID) -> i32 {
+        kResultOk
+    }
+
+    unsafe fn performEdit(&self, _id: ParamID, _value_normalized: ParamValue) -> i32 {
+        kResultOk
+    }
+
+    unsafe fn endEdit(&self, _id: ParamID) -> i32 {
+        kResultOk
+    }
+
+    unsafe fn restartComponent(&self, flags: i32) -> i32 {
+        self.restart_flags.fetch_or(flags, Ordering::AcqRel);
+        kResultOk
+    }
+}
 
 /// Backing storage for the `IBStream` we hand to
 /// `IComponent::setState` / `getState`. The plugin reads and
