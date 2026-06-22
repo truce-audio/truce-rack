@@ -50,7 +50,7 @@ use vst3::Steinberg::Vst::{
 use vst3::Steinberg::{
     IBStream, IBStreamTrait, IPlugView, IPlugViewTrait, IPluginBaseTrait, IPluginFactory,
     IPluginFactoryTrait, PClassInfo, PClassInfo_, TUID, ViewRect, kPlatformTypeHWND,
-    kPlatformTypeNSView, kPlatformTypeX11EmbedWindowID, kResultOk, kResultTrue,
+    kPlatformTypeNSView, kPlatformTypeX11EmbedWindowID, kNotImplemented, kResultOk, kResultTrue,
 };
 use vst3::{Class, ComPtr, ComWrapper};
 
@@ -103,7 +103,11 @@ impl PluginScanner for Vst3Scanner {
     fn scan_path(&self, path: &Path) -> Result<Vec<PluginInfo>> {
         let mut out = Vec::new();
         if path.exists() {
-            scan_dir_into(path, &mut out);
+            if is_vst3_bundle_path(path) {
+                scan_bundle_into(path, &mut out)?;
+            } else {
+                scan_dir_into(path, &mut out);
+            }
         }
         Ok(out)
     }
@@ -159,6 +163,12 @@ fn scan_dir_into(dir: &Path, out: &mut Vec<PluginInfo>) {
             eprintln!("[truce-rack-vst3] skipping {}: {err}", path.display());
         }
     }
+}
+
+fn is_vst3_bundle_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(VST3_EXTENSION))
 }
 
 fn scan_bundle_into(bundle: &Path, out: &mut Vec<PluginInfo>) -> Result<()> {
@@ -945,17 +955,33 @@ impl PluginCore for Vst3Plugin {
     }
 
     fn load_state(&mut self, bytes: &[u8]) -> Result<()> {
-        let stream = ComWrapper::new(MemoryStream {
+        let component_stream = ComWrapper::new(MemoryStream {
             data: std::cell::RefCell::new(bytes.to_vec()),
             position: std::cell::Cell::new(0),
         });
-        let stream_ptr = stream
+        let component_stream_ptr = component_stream
             .to_com_ptr::<IBStream>()
             .ok_or_else(|| Error::Other("MemoryStream missing IBStream IID".into()))?;
-        let status = unsafe { self.component.setState(stream_ptr.as_ptr()) };
+        let status = unsafe { self.component.setState(component_stream_ptr.as_ptr()) };
         if status != kResultOk {
             return Err(Error::Other(format!(
                 "IComponent::setState returned {status}"
+            )));
+        }
+        let controller_stream = ComWrapper::new(MemoryStream {
+            data: std::cell::RefCell::new(bytes.to_vec()),
+            position: std::cell::Cell::new(0),
+        });
+        let controller_stream_ptr = controller_stream
+            .to_com_ptr::<IBStream>()
+            .ok_or_else(|| Error::Other("MemoryStream missing IBStream IID".into()))?;
+        let status = unsafe {
+            self.controller
+                .setComponentState(controller_stream_ptr.as_ptr())
+        };
+        if status != kResultOk && status != kNotImplemented {
+            return Err(Error::Other(format!(
+                "IEditController::setComponentState returned {status}"
             )));
         }
         Ok(())
@@ -1003,10 +1029,14 @@ impl PluginCore for Vst3Plugin {
                 "IAudioProcessor::setupProcessing failed".into(),
             ));
         }
+        self.activate_buses(true);
         if unsafe { self.component.setActive(1) } != kResultOk {
+            self.activate_buses(false);
             return Err(Error::Other("IComponent::setActive(true) failed".into()));
         }
         if unsafe { self.processor.setProcessing(1) } != kResultOk {
+            unsafe { self.component.setActive(0) };
+            self.activate_buses(false);
             return Err(Error::Other(
                 "IAudioProcessor::setProcessing(true) failed".into(),
             ));
@@ -1024,6 +1054,7 @@ impl PluginCore for Vst3Plugin {
         if self.active_layout.is_some() {
             unsafe { self.component.setActive(0) };
         }
+        self.activate_buses(false);
         self.active_layout = None;
     }
     fn is_active(&self) -> bool {
@@ -1035,6 +1066,29 @@ impl PluginCore for Vst3Plugin {
             return None;
         }
         Some(self)
+    }
+}
+
+impl Vst3Plugin {
+    fn activate_buses(&self, active: bool) {
+        let state = if active { 1 } else { 0 };
+        for media_type in [MediaTypes_::kAudio, MediaTypes_::kEvent] {
+            for direction in [BusDirections_::kInput, BusDirections_::kOutput] {
+                let count =
+                    unsafe { self.component.getBusCount(media_type as i32, direction as i32) }
+                        .max(0);
+                for index in 0..count {
+                    unsafe {
+                        self.component.activateBus(
+                            media_type as i32,
+                            direction as i32,
+                            index,
+                            state,
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
