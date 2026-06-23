@@ -24,9 +24,9 @@
 //! `setActive(true)`, `setProcessing(true)`. Deactivate reverses.
 
 use truce_rack_core::buffer::AudioBuffer;
-use truce_rack_core::bus::BusLayout;
+use truce_rack_core::bus::{Bus, BusKind, BusLayout, ChannelConfig};
 use truce_rack_core::error::{Error, Result};
-use truce_rack_core::events::EventList;
+use truce_rack_core::events::{Event as RackEvent, EventBody, EventList, MidiData};
 use truce_rack_core::info::{ParameterInfo, PluginCategory, PluginInfo, PresetInfo};
 use truce_rack_core::plugin::{Plugin, PluginCore, ProcessContext, ProcessStatus};
 use truce_rack_core::scanner::PluginScanner;
@@ -37,12 +37,13 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 
 use vst3::Steinberg::Vst::{
-    AudioBusBuffers, AudioBusBuffers__type0, ControllerNumbers, ControllerNumbers_, CtrlNumber, Event,
-    Event_::EventTypes_, Event__type0, IAudioProcessor, IAudioProcessorTrait, IComponent,
-    IComponentTrait, IConnectionPoint, IConnectionPointTrait, IEditController, IEditControllerTrait,
-    IEventList, IEventListTrait, IMidiMapping, IMidiMappingTrait, IParameterChanges,
-    IParameterChangesTrait, IParamValueQueue, IParamValueQueueTrait, NoteOffEvent, NoteOnEvent,
-    ParamID, ParamValue, ParameterInfo as Vst3ParameterInfo, ParameterInfo_::ParameterFlags_,
+    AudioBusBuffers, AudioBusBuffers__type0, BusDirections_, BusInfo, BusTypes_, ControllerNumbers,
+    ControllerNumbers_, CtrlNumber, Event, Event_::EventTypes_, Event__type0, IAudioProcessor,
+    IAudioProcessorTrait, IComponent, IComponentTrait, IConnectionPoint, IConnectionPointTrait,
+    IEditController, IEditControllerTrait, IEventList, IEventListTrait, IMidiMapping,
+    IMidiMappingTrait, IParameterChanges, IParameterChangesTrait, IParamValueQueue,
+    IParamValueQueueTrait, MediaTypes_, NoteOffEvent, NoteOnEvent, ParamID, ParamValue,
+    ParameterInfo as Vst3ParameterInfo, ParameterInfo_::ParameterFlags_,
     PolyPressureEvent, ProcessContext as Vst3ProcessContext, ProcessContext_::StatesAndFlags_,
     ProcessData, ProcessModes_, ProcessSetup, SymbolicSampleSizes_, ViewType,
 };
@@ -70,9 +71,9 @@ const BUNDLE_ENTRY_SYMBOL: &[u8] = b"bundleEntry\0";
 #[cfg(target_os = "macos")]
 const BUNDLE_EXIT_SYMBOL: &[u8] = b"bundleExit\0";
 
-/// Stereo speaker arrangement = `kSpeakerL | kSpeakerR`. Defined
-/// here to avoid a `kSpeaker*` import dance.
-const STEREO_ARRANGEMENT: u64 = 0x03;
+const CTRL_AFTERTOUCH: u8 = 128;
+const CTRL_PITCH_BEND: u8 = 129;
+const CTRL_PROGRAM_CHANGE: u8 = 130;
 
 /// VST3 scanner.
 #[derive(Debug, Default)]
@@ -659,10 +660,11 @@ impl Vst3Plugin {
         // at load time. (Some plugins are slow to create the view;
         // a heavier-weight host would defer this to first open.)
         info.has_editor = unsafe { create_editor_view(&controller) }.is_some();
+        let layouts = vec![discover_audio_layout(&component)];
 
         Ok(Self {
             info,
-            layouts: vec![BusLayout::stereo()],
+            layouts,
             active_layout: None,
             _module: module,
             component,
@@ -722,6 +724,103 @@ where
         return None;
     }
     unsafe { ComPtr::<I>::from_raw(obj.cast()) }
+}
+
+// VST3 enum constants are `c_int`/`c_uint` depending on platform, so
+// the `as i32` casts are only a potential wrap on some targets.
+#[allow(clippy::cast_possible_wrap)]
+fn discover_audio_layout(component: &ComPtr<IComponent>) -> BusLayout {
+    let mut layout = BusLayout::new();
+    append_audio_buses(component, BusDirections_::kInput as i32, &mut layout);
+    append_audio_buses(component, BusDirections_::kOutput as i32, &mut layout);
+
+    if layout.outputs.is_empty() {
+        layout
+            .outputs
+            .push(Bus::main("Output", ChannelConfig::Stereo));
+    }
+
+    layout
+}
+
+#[allow(clippy::cast_possible_wrap)]
+fn append_audio_buses(component: &ComPtr<IComponent>, direction: i32, layout: &mut BusLayout) {
+    let count = unsafe { component.getBusCount(MediaTypes_::kAudio as i32, direction) }.max(0);
+    for index in 0..count {
+        let Some(bus) = query_audio_bus(component, direction, index) else {
+            continue;
+        };
+        if direction == BusDirections_::kInput as i32 {
+            layout.inputs.push(bus);
+        } else {
+            layout.outputs.push(bus);
+        }
+    }
+}
+
+#[allow(clippy::cast_possible_wrap)]
+fn query_audio_bus(component: &ComPtr<IComponent>, direction: i32, index: i32) -> Option<Bus> {
+    let mut info = empty_bus_info();
+    if unsafe { component.getBusInfo(MediaTypes_::kAudio as i32, direction, index, &raw mut info) }
+        != kResultOk
+    {
+        return None;
+    }
+
+    let channels = channel_config_for_count(info.channelCount)?;
+    let name = {
+        let raw = string128_to_string(&info.name);
+        if raw.is_empty() {
+            if direction == BusDirections_::kInput as i32 {
+                format!("Input {}", index + 1)
+            } else {
+                format!("Output {}", index + 1)
+            }
+        } else {
+            raw
+        }
+    };
+    let kind = if info.busType == BusTypes_::kMain as i32 || index == 0 {
+        BusKind::Main
+    } else if direction == BusDirections_::kInput as i32 {
+        BusKind::Sidechain
+    } else {
+        BusKind::Auxiliary
+    };
+
+    Some(Bus {
+        name,
+        kind,
+        channels,
+    })
+}
+
+fn empty_bus_info() -> BusInfo {
+    BusInfo {
+        mediaType: 0,
+        direction: 0,
+        channelCount: 0,
+        name: [0; 128],
+        busType: 0,
+        flags: 0,
+    }
+}
+
+fn channel_config_for_count(count: i32) -> Option<ChannelConfig> {
+    match count {
+        1 => Some(ChannelConfig::Mono),
+        2 => Some(ChannelConfig::Stereo),
+        n if n > 0 => Some(ChannelConfig::Discrete(u32::try_from(n).ok()?)),
+        _ => None,
+    }
+}
+
+fn speaker_arrangement_for_channels(channels: u32) -> u64 {
+    match channels {
+        0 => 0,
+        n if n >= u64::BITS => u64::MAX,
+        n => (1u64 << n) - 1,
+    }
 }
 
 impl Drop for Vst3Plugin {
@@ -868,11 +967,27 @@ impl PluginCore for Vst3Plugin {
         sample_rate: f64,
         max_block_size: usize,
     ) -> Result<()> {
-        let mut input_arr = STEREO_ARRANGEMENT;
-        let mut output_arr = STEREO_ARRANGEMENT;
+        let input_channels = layout.total_input_channels();
+        let output_channels = layout.total_output_channels();
+        let mut input_arr = speaker_arrangement_for_channels(input_channels);
+        let mut output_arr = speaker_arrangement_for_channels(output_channels);
+        let input_arr_ptr = if input_channels == 0 {
+            ptr::null_mut()
+        } else {
+            &raw mut input_arr
+        };
+        let output_arr_ptr = if output_channels == 0 {
+            ptr::null_mut()
+        } else {
+            &raw mut output_arr
+        };
         let _ = unsafe {
-            self.processor
-                .setBusArrangements(&raw mut input_arr, 1, &raw mut output_arr, 1)
+            self.processor.setBusArrangements(
+                input_arr_ptr,
+                i32::from(input_channels > 0),
+                output_arr_ptr,
+                i32::from(output_channels > 0),
+            )
         };
 
         let mut setup = ProcessSetup {
@@ -1114,6 +1229,7 @@ fn build_vst3_context(t: &TransportInfo, sample_rate: f64) -> Vst3ProcessContext
 }
 
 impl Plugin<f32> for Vst3Plugin {
+    #[allow(clippy::too_many_lines)]
     fn process(
         &mut self,
         buffer: &mut AudioBuffer<'_, f32>,
@@ -1180,9 +1296,11 @@ impl Plugin<f32> for Vst3Plugin {
             .to_com_ptr::<IEventList>()
             .ok_or_else(|| Error::Other("EventList3 missing IEventList IID".into()))?;
 
-        let main_inputs = buffer.main_inputs();
-        let mut input_ptrs: Vec<*mut f32> =
-            main_inputs.iter().map(|c| c.as_ptr().cast_mut()).collect();
+        let mut input_ptrs: Vec<*mut f32> = buffer
+            .all_inputs()
+            .iter()
+            .map(|c| c.as_ptr().cast_mut())
+            .collect();
         let mut input_bus = AudioBusBuffers {
             numChannels: i32::try_from(input_ptrs.len()).unwrap_or(0),
             silenceFlags: 0,
@@ -1191,9 +1309,11 @@ impl Plugin<f32> for Vst3Plugin {
             },
         };
 
-        let main_outputs = buffer.main_outputs();
-        let mut output_ptrs: Vec<*mut f32> =
-            main_outputs.iter_mut().map(|c| c.as_mut_ptr()).collect();
+        let mut output_ptrs: Vec<*mut f32> = buffer
+            .all_outputs()
+            .iter_mut()
+            .map(|c| c.as_mut_ptr())
+            .collect();
         let mut output_bus = AudioBusBuffers {
             numChannels: i32::try_from(output_ptrs.len()).unwrap_or(0),
             silenceFlags: 0,
@@ -1214,10 +1334,18 @@ impl Plugin<f32> for Vst3Plugin {
             #[allow(clippy::cast_possible_wrap)]
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             numSamples: i32::try_from(frames).unwrap_or(i32::MAX),
-            numInputs: 1,
-            numOutputs: 1,
-            inputs: &raw mut input_bus,
-            outputs: &raw mut output_bus,
+            numInputs: i32::from(!input_ptrs.is_empty()),
+            numOutputs: i32::from(!output_ptrs.is_empty()),
+            inputs: if input_ptrs.is_empty() {
+                ptr::null_mut()
+            } else {
+                &raw mut input_bus
+            },
+            outputs: if output_ptrs.is_empty() {
+                ptr::null_mut()
+            } else {
+                &raw mut output_bus
+            },
             inputParameterChanges: input_param_changes_ptr.as_ptr(),
             outputParameterChanges: output_param_changes_ptr.as_ptr(),
             inputEvents: input_events_ptr.as_ptr(),
@@ -1232,6 +1360,7 @@ impl Plugin<f32> for Vst3Plugin {
             ((*(*processor_ptr).vtbl).process)(processor_ptr, &raw mut data)
         });
         if status == kResultOk {
+            drain_vst3_output_events(&output_events_wrapper, context.output_events);
             Ok(ProcessStatus::Continue)
         } else {
             Ok(ProcessStatus::Error)
@@ -1495,6 +1624,103 @@ impl IParamValueQueueTrait for ParamValueQueue {
         }
         kResultOk
     }
+}
+
+fn drain_vst3_output_events(events: &EventList3, output_events: &mut EventList) {
+    for event in events.events.borrow().iter() {
+        if let Some(event) = rack_event_from_vst3(event) {
+            output_events.push(event);
+        }
+    }
+}
+
+fn rack_event_from_vst3(event: &Event) -> Option<RackEvent> {
+    let sample_offset = u32::try_from(event.sampleOffset.max(0)).ok()?;
+    let body = match u32::from(event.r#type) {
+        t if t == EventTypes_::kNoteOnEvent => {
+            let note = unsafe { event.__field0.noteOn };
+            EventBody::Midi(MidiData::NoteOn {
+                channel: midi_channel(note.channel),
+                note: midi_note(note.pitch),
+                velocity: normalized_to_midi(note.velocity),
+            })
+        }
+        t if t == EventTypes_::kNoteOffEvent => {
+            let note = unsafe { event.__field0.noteOff };
+            EventBody::Midi(MidiData::NoteOff {
+                channel: midi_channel(note.channel),
+                note: midi_note(note.pitch),
+                velocity: normalized_to_midi(note.velocity),
+            })
+        }
+        t if t == EventTypes_::kPolyPressureEvent => {
+            let pressure = unsafe { event.__field0.polyPressure };
+            EventBody::Midi(MidiData::PolyAftertouch {
+                channel: midi_channel(pressure.channel),
+                note: midi_note(pressure.pitch),
+                pressure: normalized_to_midi(pressure.pressure),
+            })
+        }
+        t if t == EventTypes_::kLegacyMIDICCOutEvent => {
+            let cc = unsafe { event.__field0.midiCCOut };
+            legacy_midi_cc_to_rack(cc.controlNumber, cc.channel, cc.value, cc.value2)?
+        }
+        _ => return None,
+    };
+
+    Some(RackEvent {
+        sample_offset,
+        body,
+    })
+}
+
+fn legacy_midi_cc_to_rack(control: u8, channel: i8, value: i8, value2: i8) -> Option<EventBody> {
+    let channel = midi_channel(i16::from(channel));
+    let value = midi_data_byte(value);
+    let body = match control {
+        0..=127 => EventBody::Midi(MidiData::ControlChange {
+            channel,
+            controller: control,
+            value,
+        }),
+        CTRL_AFTERTOUCH => EventBody::Midi(MidiData::ChannelAftertouch {
+            channel,
+            pressure: value,
+        }),
+        CTRL_PITCH_BEND => {
+            let lsb = u16::from(value & 0x7F);
+            let msb = u16::from(midi_data_byte(value2) & 0x7F);
+            EventBody::Midi(MidiData::PitchBend {
+                channel,
+                value: lsb | (msb << 7),
+            })
+        }
+        CTRL_PROGRAM_CHANGE => EventBody::Midi(MidiData::ProgramChange {
+            channel,
+            program: value,
+        }),
+        _ => return None,
+    };
+    Some(body)
+}
+
+fn midi_channel(value: i16) -> u8 {
+    u8::try_from(value).unwrap_or(0) & 0x0F
+}
+
+fn midi_note(value: i16) -> u8 {
+    u8::try_from(value.clamp(0, 127)).unwrap_or(0)
+}
+
+#[allow(clippy::cast_sign_loss)]
+fn midi_data_byte(value: i8) -> u8 {
+    // Bit-pattern reinterpret; we only keep the low 7 data bits.
+    (value as u8) & 0x7F
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn normalized_to_midi(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 127.0).round() as u8
 }
 
 #[derive(Default)]

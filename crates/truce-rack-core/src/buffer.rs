@@ -141,6 +141,17 @@ impl<'a, S: Sample> AudioBuffer<'a, S> {
         self.outputs.len()
     }
 
+    /// Flat input channels across every bus, in bus declaration order.
+    #[must_use]
+    pub fn all_inputs(&self) -> &[InputChannel<'a, S>] {
+        self.inputs
+    }
+
+    /// Flat mutable output channels across every bus, in bus declaration order.
+    pub fn all_outputs(&mut self) -> &mut [&'a mut [S]] {
+        self.outputs
+    }
+
     /// Input channels for one bus. `bus_index` is 0 for the main
     /// input; higher indices for sidechains / auxiliaries.
     ///
