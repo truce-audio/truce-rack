@@ -7,10 +7,13 @@ name: Surge XT screenshot
 # needs AppKit, and the runner's window server makes that work without
 # a visible window.
 #
-# Heavier and dependent on an external download, so it does not gate
-# pull requests; run it manually or on a push to main.
+# Runs on pull requests so reviewers can grab the just-captured editor
+# PNG as an artifact, plus manually and on pushes to main. Note: it
+# depends on an external download (the Surge XT cask), so a flaky
+# Homebrew/CDN fetch can fail the job independently of the diff.
 on:
   workflow_dispatch:
+  pull_request:
   push:
     branches: [main]
 
