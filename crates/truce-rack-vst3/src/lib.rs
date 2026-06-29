@@ -238,7 +238,7 @@ fn tuid_to_hex(cid: &[i8; 16]) -> String {
     s
 }
 
-#[allow(clippy::cast_possible_wrap)]
+#[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
 fn hex_to_tuid(hex: &str) -> Option<TUID> {
     if hex.len() != 32 {
         return None;
@@ -379,7 +379,7 @@ mod mac {
 
 /// Per-platform VST3 bundle layout. Linux uses
 /// `Contents/<arch>-linux/<stem>.so`; Windows uses
-/// `Contents/<arch>-win/<stem>.vst3`. macOS goes through CFBundle
+/// `Contents/<arch>-win/<stem>.vst3`. macOS goes through `CFBundle`
 /// instead (see [`mac::MacBundle`]) so its binary lookup lives
 /// there.
 #[cfg(not(target_os = "macos"))]
@@ -411,9 +411,9 @@ fn bundle_binary_path(bundle: &Path) -> PathBuf {
 }
 
 /// RAII wrapper around the loaded module. On macOS this is a real
-/// `CFBundle` so the plugin's `bundleEntry` sees the CFPlugin /
-/// CFBundleGetIdentifier context it expects (raw dlopen crashes
-/// some bundles — Surge XT Effects calls into CFPlugin's
+/// `CFBundle` so the plugin's `bundleEntry` sees the `CFPlugin` /
+/// `CFBundleGetIdentifier` context it expects (raw dlopen crashes
+/// some bundles — Surge XT Effects calls into `CFPlugin`'s
 /// `AddInstanceForFactory` during init). On Linux / Windows the
 /// underlying file is a plain dynamic library; `libloading` is
 /// enough.
@@ -857,7 +857,7 @@ where
 
 // VST3 enum constants are `c_int`/`c_uint` depending on platform, so
 // the `as i32` casts are only a potential wrap on some targets.
-#[allow(clippy::cast_possible_wrap)]
+#[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
 fn discover_audio_layout(component: &ComPtr<IComponent>) -> BusLayout {
     let mut layout = BusLayout::new();
     append_audio_buses(component, BusDirections_::kInput as i32, &mut layout);
@@ -872,7 +872,7 @@ fn discover_audio_layout(component: &ComPtr<IComponent>) -> BusLayout {
     layout
 }
 
-#[allow(clippy::cast_possible_wrap)]
+#[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
 fn append_audio_buses(component: &ComPtr<IComponent>, direction: i32, layout: &mut BusLayout) {
     let count = unsafe { component.getBusCount(MediaTypes_::kAudio as i32, direction) }.max(0);
     for index in 0..count {
@@ -887,7 +887,7 @@ fn append_audio_buses(component: &ComPtr<IComponent>, direction: i32, layout: &m
     }
 }
 
-#[allow(clippy::cast_possible_wrap)]
+#[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
 fn query_audio_bus(component: &ComPtr<IComponent>, direction: i32, index: i32) -> Option<Bus> {
     let mut info = empty_bus_info();
     if unsafe { component.getBusInfo(MediaTypes_::kAudio as i32, direction, index, &raw mut info) }
@@ -1108,9 +1108,9 @@ impl PluginCore for Vst3Plugin {
         };
 
         let mut setup = ProcessSetup {
-            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
             processMode: ProcessModes_::kRealtime as i32,
-            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             maxSamplesPerBlock: i32::try_from(max_block_size).unwrap_or(i32::MAX),
             sampleRate: sample_rate,
@@ -1163,7 +1163,7 @@ impl PluginCore for Vst3Plugin {
 impl Vst3Plugin {
     // VST3 enum constants are `c_int`/`c_uint` depending on platform,
     // so the `as i32` casts are only a potential wrap on some targets.
-    #[allow(clippy::cast_possible_wrap)]
+    #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
     fn activate_buses(&self, active: bool) {
         let state = u8::from(active);
         for media_type in [MediaTypes_::kAudio, MediaTypes_::kEvent] {
@@ -1482,9 +1482,9 @@ impl Plugin<f32> for Vst3Plugin {
             .transport
             .map(|t| build_vst3_context(&t, context.sample_rate));
         let mut data = ProcessData {
-            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
             processMode: ProcessModes_::kRealtime as i32,
-            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             numSamples: i32::try_from(frames).unwrap_or(i32::MAX),
             numInputs: i32::from(!input_ptrs.is_empty()),
@@ -1796,8 +1796,17 @@ fn drain_vst3_output_events(events: &EventList3, output_events: &mut EventList) 
 
 fn rack_event_from_vst3(event: &Event) -> Option<RackEvent> {
     let sample_offset = u32::try_from(event.sampleOffset.max(0)).ok()?;
-    let body = match u32::from(event.r#type) {
-        t if t == EventTypes_::kNoteOnEvent => {
+    // `EventTypes_` is a C enum whose repr is `i32` on MSVC and `u32`
+    // elsewhere, while `Event::type` is `u16`. Normalize the tags to
+    // the field's width up front so the comparisons compile on every
+    // target — same `u16::try_from` idiom `EventBuffer::push_rack`
+    // uses on the way out.
+    let note_on = u16::try_from(EventTypes_::kNoteOnEvent).unwrap_or(u16::MAX);
+    let note_off = u16::try_from(EventTypes_::kNoteOffEvent).unwrap_or(u16::MAX);
+    let poly_pressure = u16::try_from(EventTypes_::kPolyPressureEvent).unwrap_or(u16::MAX);
+    let legacy_cc = u16::try_from(EventTypes_::kLegacyMIDICCOutEvent).unwrap_or(u16::MAX);
+    let body = match event.r#type {
+        t if t == note_on => {
             let note = unsafe { event.__field0.noteOn };
             EventBody::Midi(MidiData::NoteOn {
                 channel: midi_channel(note.channel),
@@ -1805,7 +1814,7 @@ fn rack_event_from_vst3(event: &Event) -> Option<RackEvent> {
                 velocity: normalized_to_midi(note.velocity),
             })
         }
-        t if t == EventTypes_::kNoteOffEvent => {
+        t if t == note_off => {
             let note = unsafe { event.__field0.noteOff };
             EventBody::Midi(MidiData::NoteOff {
                 channel: midi_channel(note.channel),
@@ -1813,7 +1822,7 @@ fn rack_event_from_vst3(event: &Event) -> Option<RackEvent> {
                 velocity: normalized_to_midi(note.velocity),
             })
         }
-        t if t == EventTypes_::kPolyPressureEvent => {
+        t if t == poly_pressure => {
             let pressure = unsafe { event.__field0.polyPressure };
             EventBody::Midi(MidiData::PolyAftertouch {
                 channel: midi_channel(pressure.channel),
@@ -1821,7 +1830,7 @@ fn rack_event_from_vst3(event: &Event) -> Option<RackEvent> {
                 pressure: normalized_to_midi(pressure.pressure),
             })
         }
-        t if t == EventTypes_::kLegacyMIDICCOutEvent => {
+        t if t == legacy_cc => {
             let cc = unsafe { event.__field0.midiCCOut };
             legacy_midi_cc_to_rack(cc.controlNumber, cc.channel, cc.value, cc.value2)?
         }
@@ -2059,7 +2068,7 @@ impl IBStreamTrait for MemoryStream {
         kResultOk
     }
 
-    #[allow(clippy::cast_possible_wrap)]
+    #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
     unsafe fn seek(&self, pos: i64, mode: i32, result: *mut i64) -> i32 {
         // VST3 SDK SeekMode: 0 = `SeekSet`, 1 = `SeekCur`, 2 = `SeekEnd`.
         let data_len = self.data.borrow().len() as i64;
@@ -2083,7 +2092,7 @@ impl IBStreamTrait for MemoryStream {
         kResultOk
     }
 
-    #[allow(clippy::cast_possible_wrap)]
+    #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
     unsafe fn tell(&self, pos: *mut i64) -> i32 {
         if pos.is_null() {
             return -1;

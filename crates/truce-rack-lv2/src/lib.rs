@@ -393,6 +393,10 @@ struct Features {
 }
 
 impl Features {
+    // The `Box` return is load-bearing, not a style slip: lilv keeps
+    // the interior pointers we hand it, so the allocation must not
+    // move after construction — returning `Self` by value would.
+    #[allow(clippy::unnecessary_box_returns)]
     fn new() -> Box<Self> {
         // Build in two passes so the `Box`'s heap address is stable
         // before we record interior pointers.

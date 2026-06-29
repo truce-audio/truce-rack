@@ -814,6 +814,11 @@ unsafe fn gui_supports_current_platform(
     unsafe { is_supported(plugin, platform_api().as_ptr(), false) }
 }
 
+// `clap_xwnd` is `c_ulong` — 64-bit on X11 platforms (where the
+// `X11` handle is actually used) but 32-bit on Windows, where this
+// arm is dead code. `id as _` only "truncates" on the platform that
+// never takes it, so silence the lint rather than complicate the cast.
+#[allow(clippy::cast_possible_truncation)]
 fn handle_to_clap_window(handle: truce_rack_core::editor::WindowHandle) -> clap_window {
     use truce_rack_core::editor::WindowHandle;
     let (api, specific) = match handle {
