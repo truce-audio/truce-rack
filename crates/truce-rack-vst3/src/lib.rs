@@ -37,13 +37,14 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 
 use vst3::Steinberg::Vst::{
-    AudioBusBuffers, AudioBusBuffers__type0, Event, Event_::EventTypes_, Event__type0,
-    IAudioProcessor, IAudioProcessorTrait, IComponent, IComponentTrait, IConnectionPoint,
-    IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList, IEventListTrait,
-    IParameterChanges, NoteOffEvent, NoteOnEvent, ParameterInfo as Vst3ParameterInfo,
-    ParameterInfo_::ParameterFlags_, PolyPressureEvent, ProcessContext as Vst3ProcessContext,
-    ProcessContext_::StatesAndFlags_, ProcessData, ProcessModes_, ProcessSetup,
-    SymbolicSampleSizes_, ViewType,
+    AudioBusBuffers, AudioBusBuffers__type0, ControllerNumbers, ControllerNumbers_, CtrlNumber, Event,
+    Event_::EventTypes_, Event__type0, IAudioProcessor, IAudioProcessorTrait, IComponent,
+    IComponentTrait, IConnectionPoint, IConnectionPointTrait, IEditController, IEditControllerTrait,
+    IEventList, IEventListTrait, IMidiMapping, IMidiMappingTrait, IParameterChanges,
+    IParameterChangesTrait, IParamValueQueue, IParamValueQueueTrait, NoteOffEvent, NoteOnEvent,
+    ParamID, ParamValue, ParameterInfo as Vst3ParameterInfo, ParameterInfo_::ParameterFlags_,
+    PolyPressureEvent, ProcessContext as Vst3ProcessContext, ProcessContext_::StatesAndFlags_,
+    ProcessData, ProcessModes_, ProcessSetup, SymbolicSampleSizes_, ViewType,
 };
 use vst3::Steinberg::{
     IBStream, IBStreamTrait, IPlugView, IPlugViewTrait, IPluginBaseTrait, IPluginFactory,
@@ -529,6 +530,18 @@ pub struct Vst3Plugin {
     separate_controller: bool,
     component_cp: Option<ComPtr<IConnectionPoint>>,
     controller_cp: Option<ComPtr<IConnectionPoint>>,
+    /// `IMidiMapping` from the edit controller, when the plugin
+    /// exposes one. Lets us turn MIDI CC / channel-pressure /
+    /// pitch-bend input into the parameter changes the processor
+    /// actually reads (VST3 delivers controller-style MIDI through
+    /// `IParameterChanges`, not `IEventList`).
+    midi_mapping: Option<ComPtr<IMidiMapping>>,
+
+    /// Host-thread `set_parameter` writes queued for delivery to
+    /// the processor via `inputParameterChanges` on the next
+    /// `process` call. Each entry is a `(param id, normalized
+    /// value)` pair; drained every block.
+    pending_param_changes: Vec<(ParamID, f64)>,
 
     param_count: usize,
     processing: bool,
@@ -631,6 +644,11 @@ impl Vst3Plugin {
             (None, None)
         };
 
+        // IMidiMapping is optional — synths usually expose it,
+        // pure effects often don't. Absence just means CC input has
+        // nowhere to map to.
+        let midi_mapping = controller.as_com_ref().cast::<IMidiMapping>();
+
         let param_count_raw = unsafe { controller.getParameterCount() }.max(0);
         #[allow(clippy::cast_sign_loss)]
         let param_count = param_count_raw as usize;
@@ -653,6 +671,8 @@ impl Vst3Plugin {
             separate_controller,
             component_cp,
             controller_cp,
+            midi_mapping,
+            pending_param_changes: Vec::new(),
             param_count,
             processing: false,
             view: None,
@@ -783,11 +803,19 @@ impl PluginCore for Vst3Plugin {
             return Err(Error::InvalidParameter(index));
         }
         let clamped = value.clamp(0.0, 1.0);
+        // Update the controller so any open editor reflects the new
+        // value...
         if unsafe { self.controller.setParamNormalized(info.id, clamped) } != kResultOk {
             return Err(Error::Other(
                 "IEditController::setParamNormalized failed".into(),
             ));
         }
+        // ...and queue the same change for the processor. For
+        // separate controller/processor plugins, setParamNormalized
+        // alone never reaches the audio side — the processor only
+        // observes parameter changes that arrive through
+        // inputParameterChanges during process().
+        self.pending_param_changes.push((info.id, clamped));
         Ok(())
     }
 
@@ -1097,12 +1125,50 @@ impl Plugin<f32> for Vst3Plugin {
         }
         let frames = buffer.num_frames();
 
+        // Build the input parameter changes the processor reads:
+        // host-thread set_parameter() writes drained from the queue,
+        // plus any MIDI controller events the plugin maps through
+        // IMidiMapping (CC / channel pressure / pitch bend). Both
+        // arrive on the same VST3 path — inputParameterChanges —
+        // rather than the event list.
+        let input_param_changes = ComWrapper::new(ParameterChanges::default());
+        for (param_id, value) in self.pending_param_changes.drain(..) {
+            input_param_changes.push_point(param_id, 0, value);
+        }
+
         // Build an IEventList for the plugin's inputEvents slot.
-        // We translate truce-rack MIDI events to VST3 Event structs.
+        // Note-style MIDI goes here; controller-style MIDI is peeled
+        // off into the parameter changes above.
         let mut translated = EventBuffer::default();
         for event in events {
+            if let Some((ctrl_number, channel, normalized)) = midi_controller_assignment(event) {
+                // Controller-style MIDI only reaches the processor
+                // when the plugin maps it. With no IMidiMapping (or
+                // no assignment for this controller) there's no VST3
+                // path for it, so it's dropped rather than sent as a
+                // note event.
+                if let Some(mapping) = &self.midi_mapping {
+                    let mut param_id: ParamID = 0;
+                    let assigned = unsafe {
+                        mapping.getMidiControllerAssignment(0, channel, ctrl_number, &raw mut param_id)
+                    } == kResultOk;
+                    if assigned {
+                        let offset = i32::try_from(event.sample_offset).unwrap_or(i32::MAX);
+                        input_param_changes.push_point(param_id, offset, normalized);
+                    }
+                }
+                continue;
+            }
             translated.push_rack(event);
         }
+        let input_param_changes_ptr = input_param_changes
+            .to_com_ptr::<IParameterChanges>()
+            .ok_or_else(|| Error::Other("ParameterChanges missing IParameterChanges IID".into()))?;
+        let output_param_changes = ComWrapper::new(ParameterChanges::default());
+        let output_param_changes_ptr = output_param_changes
+            .to_com_ptr::<IParameterChanges>()
+            .ok_or_else(|| Error::Other("ParameterChanges missing IParameterChanges IID".into()))?;
+
         let input_events_wrapper = ComWrapper::new(EventList3 {
             events: std::cell::RefCell::new(translated.events),
         });
@@ -1152,8 +1218,8 @@ impl Plugin<f32> for Vst3Plugin {
             numOutputs: 1,
             inputs: &raw mut input_bus,
             outputs: &raw mut output_bus,
-            inputParameterChanges: ptr::null_mut::<IParameterChanges>(),
-            outputParameterChanges: ptr::null_mut::<IParameterChanges>(),
+            inputParameterChanges: input_param_changes_ptr.as_ptr(),
+            outputParameterChanges: output_param_changes_ptr.as_ptr(),
             inputEvents: input_events_ptr.as_ptr(),
             outputEvents: output_events_ptr.as_ptr(),
             processContext: process_context
@@ -1259,13 +1325,175 @@ impl EventBuffer {
                 };
                 self.events.push(ev);
             }
-            // VST3 routes CC / ProgramChange / ChannelAftertouch /
-            // PitchBend / Sysex through IParameterChanges or
-            // IMidiMapping rather than IEventList. Wiring those is
-            // a follow-on; for hosting test purposes notes are the
-            // primary need.
+            // CC / channel pressure / pitch bend are peeled off in
+            // `process` and delivered through IParameterChanges via
+            // IMidiMapping (see `midi_controller_assignment`), so
+            // they never reach this translator. ProgramChange and
+            // Sysex have no IEventList representation and are
+            // dropped.
             _ => {}
         }
+    }
+}
+
+/// Classify a rack MIDI event as a VST3 *controller-style* message
+/// and return `(controller number, channel, normalized value)`.
+///
+/// VST3 has no `IEventList` representation for CC, channel pressure,
+/// or pitch bend — they reach the processor as parameter changes,
+/// keyed by the `IMidiMapping` the plugin publishes. Note on/off and
+/// poly pressure are real `Event`s and return `None` here so they
+/// stay on the event-list path.
+fn midi_controller_assignment(
+    event: &truce_rack_core::events::Event,
+) -> Option<(CtrlNumber, i16, ParamValue)> {
+    use truce_rack_core::events::{EventBody, MidiData};
+    // `ControllerNumbers` is a C enum (c_int/c_uint); every value we
+    // use is well under i16::MAX, so the cast to CtrlNumber is exact.
+    #[allow(clippy::cast_possible_truncation)]
+    let ctrl = |n: ControllerNumbers| n as CtrlNumber;
+    let EventBody::Midi(midi) = event.body else {
+        return None;
+    };
+    match midi {
+        MidiData::ControlChange {
+            channel,
+            controller,
+            value,
+        } => Some((
+            CtrlNumber::from(controller & 0x7F),
+            i16::from(channel & 0x0F),
+            ParamValue::from(value & 0x7F) / 127.0,
+        )),
+        MidiData::ChannelAftertouch { channel, pressure } => Some((
+            ctrl(ControllerNumbers_::kAfterTouch),
+            i16::from(channel & 0x0F),
+            ParamValue::from(pressure & 0x7F) / 127.0,
+        )),
+        MidiData::PitchBend { channel, value } => Some((
+            ctrl(ControllerNumbers_::kPitchBend),
+            i16::from(channel & 0x0F),
+            ParamValue::from(value & 0x3FFF) / 16383.0,
+        )),
+        _ => None,
+    }
+}
+
+/// Host-side `IParameterChanges` — a flat list of per-parameter
+/// value queues. We populate the input instance before `process`
+/// (`set_parameter` writes + mapped MIDI controllers) and hand the
+/// plugin an empty output instance to record automation into.
+#[derive(Default)]
+struct ParameterChanges {
+    queues: std::cell::RefCell<Vec<ComWrapper<ParamValueQueue>>>,
+}
+
+impl ParameterChanges {
+    /// Append a `(sample offset, value)` point for `param_id`,
+    /// reusing the parameter's existing queue when one is already
+    /// present. Points must stay sorted by offset within a queue;
+    /// callers feed events in block order so appends preserve that.
+    fn push_point(&self, param_id: ParamID, sample_offset: i32, value: ParamValue) {
+        let mut queues = self.queues.borrow_mut();
+        if let Some(queue) = queues.iter().find(|q| q.param_id == param_id) {
+            queue.points.borrow_mut().push((sample_offset, value));
+            return;
+        }
+        queues.push(ComWrapper::new(ParamValueQueue {
+            param_id,
+            points: std::cell::RefCell::new(vec![(sample_offset, value)]),
+        }));
+    }
+}
+
+impl Class for ParameterChanges {
+    type Interfaces = (IParameterChanges,);
+}
+
+#[allow(clippy::cast_sign_loss)]
+impl IParameterChangesTrait for ParameterChanges {
+    unsafe fn getParameterCount(&self) -> i32 {
+        i32::try_from(self.queues.borrow().len()).unwrap_or(i32::MAX)
+    }
+
+    unsafe fn getParameterData(&self, index: i32) -> *mut IParamValueQueue {
+        if index < 0 {
+            return ptr::null_mut();
+        }
+        let queues = self.queues.borrow();
+        queues.get(index as usize).map_or(ptr::null_mut(), |queue| {
+            queue
+                .as_com_ref::<IParamValueQueue>()
+                .map_or(ptr::null_mut(), |r| r.as_ptr())
+        })
+    }
+
+    unsafe fn addParameterData(&self, id: *const ParamID, index: *mut i32) -> *mut IParamValueQueue {
+        if id.is_null() {
+            return ptr::null_mut();
+        }
+        let param_id = unsafe { *id };
+        let mut queues = self.queues.borrow_mut();
+        let pos = queues.iter().position(|q| q.param_id == param_id).unwrap_or_else(|| {
+            queues.push(ComWrapper::new(ParamValueQueue {
+                param_id,
+                points: std::cell::RefCell::new(Vec::new()),
+            }));
+            queues.len() - 1
+        });
+        if !index.is_null() {
+            unsafe { *index = i32::try_from(pos).unwrap_or(i32::MAX) };
+        }
+        queues[pos]
+            .as_com_ref::<IParamValueQueue>()
+            .map_or(ptr::null_mut(), |r| r.as_ptr())
+    }
+}
+
+/// One parameter's ordered list of automation points, exposed to
+/// the plugin as `IParamValueQueue`.
+#[derive(Default)]
+struct ParamValueQueue {
+    param_id: ParamID,
+    points: std::cell::RefCell<Vec<(i32, ParamValue)>>,
+}
+
+impl Class for ParamValueQueue {
+    type Interfaces = (IParamValueQueue,);
+}
+
+#[allow(clippy::cast_sign_loss)]
+impl IParamValueQueueTrait for ParamValueQueue {
+    unsafe fn getParameterId(&self) -> ParamID {
+        self.param_id
+    }
+
+    unsafe fn getPointCount(&self) -> i32 {
+        i32::try_from(self.points.borrow().len()).unwrap_or(i32::MAX)
+    }
+
+    unsafe fn getPoint(&self, index: i32, sample_offset: *mut i32, value: *mut ParamValue) -> i32 {
+        if index < 0 || sample_offset.is_null() || value.is_null() {
+            return -1;
+        }
+        let points = self.points.borrow();
+        let Some(&(offset, val)) = points.get(index as usize) else {
+            return -1;
+        };
+        unsafe {
+            *sample_offset = offset;
+            *value = val;
+        }
+        kResultOk
+    }
+
+    unsafe fn addPoint(&self, sample_offset: i32, value: ParamValue, index: *mut i32) -> i32 {
+        let mut points = self.points.borrow_mut();
+        points.push((sample_offset, value));
+        if !index.is_null() {
+            unsafe { *index = i32::try_from(points.len() - 1).unwrap_or(i32::MAX) };
+        }
+        kResultOk
     }
 }
 
