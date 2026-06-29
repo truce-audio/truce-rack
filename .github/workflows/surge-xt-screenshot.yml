@@ -1,0 +1,89 @@
+name: Surge XT screenshot
+
+# End-to-end GUI check: install a real third-party plugin (Surge XT),
+# confirm rack's scanner finds it, then open its editor through rack
+# and capture it to a PNG artifact. macOS-only — truce-rack-screenshot
+# snaps the plugin's offscreen NSView via cacheDisplayInRect:, which
+# needs AppKit, and the runner's window server makes that work without
+# a visible window.
+#
+# Heavier and dependent on an external download, so it does not gate
+# pull requests; run it manually or on a push to main.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  surge-xt:
+    name: install + list + screenshot (macos-14)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-14-surge
+          cache-bin: false
+
+      # The surge-xt cask is a system .pkg that installs the CLAP,
+      # VST3, and AU builds into /Library/Audio/Plug-Ins/{CLAP,VST3,
+      # Components} — exactly the locations rack's scanners walk.
+      - name: Install Surge XT
+        run: brew install --cask surge-xt
+
+      # rack must see Surge across the formats it scans. Fail loudly
+      # if the scan path regresses (the cask installs it, so absence
+      # means rack stopped finding system plug-ins).
+      - name: Verify rack lists Surge XT
+        run: |
+          cargo run -p truce-rack-standalone --bin truce-rack-standalone \
+            --features "vst3,au" -- --list | tee plugins.txt
+          grep -iq surge plugins.txt || {
+            echo "::error::rack --list did not report Surge XT"
+            exit 1
+          }
+
+      # Open every installed VST3 editor offscreen and snap it. On a
+      # clean runner the only VST3s present are Surge XT + Surge XT
+      # Effects, so this captures what the cask just installed.
+      - name: Screenshot Surge XT editor
+        run: |
+          cargo run -p truce-rack-standalone --bin truce-rack-screenshot \
+            --features "vst3,au" -- --format vst3 --output-dir screenshots
+          ls -la screenshots
+
+      # Guard against a silent empty capture: require at least one PNG
+      # with non-zero dimensions.
+      - name: Verify a screenshot was produced
+        run: |
+          shopt -s nullglob
+          shots=(screenshots/*.png)
+          if (( ${#shots[@]} == 0 )); then
+            echo "::error::no screenshots were captured"
+            exit 1
+          fi
+          for png in "${shots[@]}"; do
+            w=$(sips -g pixelWidth "$png" | awk '/pixelWidth/{print $2}')
+            h=$(sips -g pixelHeight "$png" | awk '/pixelHeight/{print $2}')
+            echo "$png — ${w}x${h}"
+            if [[ -z "$w" || "$w" -le 0 || -z "$h" || "$h" -le 0 ]]; then
+              echo "::error::$png has no pixels"
+              exit 1
+            fi
+          done
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surge-xt-screenshots
+          path: screenshots/
+          if-no-files-found: error
