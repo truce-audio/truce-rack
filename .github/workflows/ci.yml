@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "dev/**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Thinner debug info keeps the cache small without losing
+  # backtraces. Mirrors the truce workspace CI.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  # Primary lint + test gate. Linux compiles every crate except the
+  # apple-gated au / au3 wrappers (they are `#![cfg(target_vendor =
+  # "apple")]`, so they vanish to empty crates here); the macOS job
+  # below covers those.
+  linux:
+    name: clippy + test + smoke (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ubuntu-24.04
+          cache-bin: false
+
+      # cpal / midir link ALSA (and probe JACK); truce-rack-lv2 links
+      # the system lilv. pkg-config + build-essential cover the rest.
+      - name: Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libasound2-dev libjack-jackd2-dev \
+            liblilv-dev
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: build
+        run: cargo build --workspace --all-targets
+
+      - name: test
+        run: cargo test --workspace
+
+      # Smoke 1: the standalone host enumerates plugins headlessly.
+      # No plugins are installed on the runner, so this scans every
+      # enabled format and exits 0 — it proves the scan path loads
+      # and runs without panicking.
+      - name: smoke — standalone --list
+        run: cargo run -p truce-rack-standalone --bin truce-rack-standalone --features vst3 -- --list
+
+      # Smoke 2: the cargo subcommand installs and runs as `cargo
+      # rack`. On Linux cargo-rack is clap + vst3 (pure Rust).
+      - name: smoke — cargo rack install + list
+        run: |
+          cargo install --path crates/cargo-rack --locked
+          cargo rack --list
+
+  # macOS covers the apple-only au / au3 wrappers and the full
+  # "batteries included" cargo-rack (clap + vst3 + au + au3 + gui).
+  macos:
+    name: clippy + smoke (macos-14)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-14
+          cache-bin: false
+
+      # truce-rack-lv2 links lilv; Homebrew provides it. build.rs
+      # already adds the Homebrew lib dir to the link search path.
+      - name: lilv
+        run: brew install lilv
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: build
+        run: cargo build --workspace --all-targets
+
+      - name: smoke — standalone --list
+        run: cargo run -p truce-rack-standalone --bin truce-rack-standalone --features "vst3,au,au3" -- --list
+
+      - name: smoke — cargo rack install + list
+        run: |
+          cargo install --path crates/cargo-rack --locked
+          cargo rack --list

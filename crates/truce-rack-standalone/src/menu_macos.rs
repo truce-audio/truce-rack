@@ -119,10 +119,8 @@ pub fn install(plugin_name: &str) {
             let settings_item = make_menu_item("Settings");
             let settings_menu = make_menu("Settings");
 
-            state.output_device_menu =
-                add_submenu(settings_menu, "Output Device", target);
-            state.output_channels_menu =
-                add_submenu(settings_menu, "Output Channels", target);
+            state.output_device_menu = add_submenu(settings_menu, "Output Device", target);
+            state.output_channels_menu = add_submenu(settings_menu, "Output Channels", target);
             add_separator(settings_menu);
             state.midi_input_menu = add_submenu(settings_menu, "MIDI Input", target);
             state.midi_channel_menu = add_submenu(settings_menu, "MIDI Channel", target);
@@ -173,7 +171,10 @@ fn target_class() -> &'static AnyClass {
                 menu_will_open as extern "C-unwind" fn(_, _, _),
             );
         }
-        CLASS.store(ptr::from_ref(builder.register()).cast_mut(), Ordering::Release);
+        CLASS.store(
+            ptr::from_ref(builder.register()).cast_mut(),
+            Ordering::Release,
+        );
     });
     // SAFETY: set inside the Once above before any use.
     unsafe { &*CLASS.load(Ordering::Acquire).cast_const() }
@@ -260,8 +261,13 @@ unsafe fn populate_output_devices(state: &mut MenuState) {
 
         for name in device::output_device_names() {
             let checked = current == Some(name.as_str());
-            let item =
-                make_action_item(&name, sel!(selectOutputDeviceAction:), state.target, 0, checked);
+            let item = make_action_item(
+                &name,
+                sel!(selectOutputDeviceAction:),
+                state.target,
+                0,
+                checked,
+            );
             let _: () = msg_send![menu, addItem: item];
         }
     }
@@ -290,12 +296,18 @@ unsafe fn populate_output_channels(state: &mut MenuState) {
         // Stereo pairs: 1-2, 3-4, …
         let mut base = 0;
         while base + 1 < channels {
-            add(&format!("{}-{}", base + 1, base + 2), ChannelRoute::Stereo { base });
+            add(
+                &format!("{}-{}", base + 1, base + 2),
+                ChannelRoute::Stereo { base },
+            );
             base += 2;
         }
         // Mono fold-downs onto each single channel.
         for base in 0..channels {
-            add(&format!("Channel {} (mono)", base + 1), ChannelRoute::Mono { base });
+            add(
+                &format!("Channel {} (mono)", base + 1),
+                ChannelRoute::Mono { base },
+            );
         }
     }
 }
@@ -322,8 +334,13 @@ unsafe fn populate_midi_inputs(state: &mut MenuState) {
         }
         for name in names {
             let checked = current == Some(name.as_str());
-            let item =
-                make_action_item(&name, sel!(selectMidiInputAction:), state.target, 0, checked);
+            let item = make_action_item(
+                &name,
+                sel!(selectMidiInputAction:),
+                state.target,
+                0,
+                checked,
+            );
             let _: () = msg_send![menu, addItem: item];
         }
     }
@@ -410,7 +427,11 @@ unsafe fn check_only(sender: *mut AnyObject) {
     }
 }
 
-unsafe fn add_submenu(parent: *mut AnyObject, title: &str, target: *mut AnyObject) -> *mut AnyObject {
+unsafe fn add_submenu(
+    parent: *mut AnyObject,
+    title: &str,
+    target: *mut AnyObject,
+) -> *mut AnyObject {
     unsafe {
         let item = make_menu_item(title);
         let submenu = make_menu(title);

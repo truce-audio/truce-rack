@@ -57,6 +57,9 @@ lilv-sys = "0.2"
 # Hardware MIDI input for the standalone host.
 midir = "0.10"
 
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 

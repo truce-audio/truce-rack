@@ -24,31 +24,40 @@
 //! `setActive(true)`, `setProcessing(true)`. Deactivate reverses.
 
 use truce_rack_core::buffer::AudioBuffer;
-use truce_rack_core::bus::BusLayout;
+use truce_rack_core::bus::{Bus, BusKind, BusLayout, ChannelConfig};
 use truce_rack_core::error::{Error, Result};
-use truce_rack_core::events::EventList;
+use truce_rack_core::events::{Event as RackEvent, EventBody, EventList, MidiData};
 use truce_rack_core::info::{ParameterInfo, PluginCategory, PluginInfo, PresetInfo};
 use truce_rack_core::plugin::{Plugin, PluginCore, ProcessContext, ProcessStatus};
 use truce_rack_core::scanner::PluginScanner;
 use truce_rack_core::transport::TransportInfo;
 use truce_rack_core::wrapper::run_audio_block_with;
 
-use std::path::{Path, PathBuf};
 use std::ptr;
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicI32, Ordering},
+    },
+};
 
 use vst3::Steinberg::Vst::{
-    AudioBusBuffers, AudioBusBuffers__type0, Event, Event_::EventTypes_, Event__type0,
-    IAudioProcessor, IAudioProcessorTrait, IComponent, IComponentTrait, IConnectionPoint,
-    IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList, IEventListTrait,
-    IParameterChanges, NoteOffEvent, NoteOnEvent, ParameterInfo as Vst3ParameterInfo,
-    ParameterInfo_::ParameterFlags_, PolyPressureEvent, ProcessContext as Vst3ProcessContext,
-    ProcessContext_::StatesAndFlags_, ProcessData, ProcessModes_, ProcessSetup,
-    SymbolicSampleSizes_, ViewType,
+    AudioBusBuffers, AudioBusBuffers__type0, BusDirections_, BusInfo, BusTypes_, ControllerNumbers,
+    ControllerNumbers_, CtrlNumber, Event, Event_::EventTypes_, Event__type0, IAudioProcessor,
+    IAudioProcessorTrait, IComponent, IComponentHandler, IComponentHandlerTrait, IComponentTrait,
+    IConnectionPoint, IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList,
+    IEventListTrait, IHostApplication, IHostApplicationTrait, IMidiMapping, IMidiMappingTrait,
+    IParamValueQueue, IParamValueQueueTrait, IParameterChanges, IParameterChangesTrait,
+    MediaTypes_, NoteOffEvent, NoteOnEvent, ParamID, ParamValue,
+    ParameterInfo as Vst3ParameterInfo, ParameterInfo_::ParameterFlags_, PolyPressureEvent,
+    ProcessContext as Vst3ProcessContext, ProcessContext_::StatesAndFlags_, ProcessData,
+    ProcessModes_, ProcessSetup, RestartFlags_, String128, SymbolicSampleSizes_, ViewType,
 };
 use vst3::Steinberg::{
-    IBStream, IBStreamTrait, IPlugView, IPlugViewTrait, IPluginBaseTrait, IPluginFactory,
-    IPluginFactoryTrait, PClassInfo, PClassInfo_, TUID, ViewRect, kPlatformTypeHWND,
-    kPlatformTypeNSView, kPlatformTypeX11EmbedWindowID, kResultOk, kResultTrue,
+    FUnknown, IBStream, IBStreamTrait, IPlugView, IPlugViewTrait, IPluginBaseTrait, IPluginFactory,
+    IPluginFactoryTrait, PClassInfo, PClassInfo_, TUID, ViewRect, kNotImplemented,
+    kPlatformTypeHWND, kPlatformTypeNSView, kPlatformTypeX11EmbedWindowID, kResultOk, kResultTrue,
 };
 use vst3::{Class, ComPtr, ComWrapper};
 
@@ -69,9 +78,9 @@ const BUNDLE_ENTRY_SYMBOL: &[u8] = b"bundleEntry\0";
 #[cfg(target_os = "macos")]
 const BUNDLE_EXIT_SYMBOL: &[u8] = b"bundleExit\0";
 
-/// Stereo speaker arrangement = `kSpeakerL | kSpeakerR`. Defined
-/// here to avoid a `kSpeaker*` import dance.
-const STEREO_ARRANGEMENT: u64 = 0x03;
+const CTRL_AFTERTOUCH: u8 = 128;
+const CTRL_PITCH_BEND: u8 = 129;
+const CTRL_PROGRAM_CHANGE: u8 = 130;
 
 /// VST3 scanner.
 #[derive(Debug, Default)]
@@ -101,7 +110,11 @@ impl PluginScanner for Vst3Scanner {
     fn scan_path(&self, path: &Path) -> Result<Vec<PluginInfo>> {
         let mut out = Vec::new();
         if path.exists() {
-            scan_dir_into(path, &mut out);
+            if is_vst3_bundle_path(path) {
+                scan_bundle_into(path, &mut out)?;
+            } else {
+                scan_dir_into(path, &mut out);
+            }
         }
         Ok(out)
     }
@@ -157,6 +170,12 @@ fn scan_dir_into(dir: &Path, out: &mut Vec<PluginInfo>) {
             eprintln!("[truce-rack-vst3] skipping {}: {err}", path.display());
         }
     }
+}
+
+fn is_vst3_bundle_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(VST3_EXTENSION))
 }
 
 fn scan_bundle_into(bundle: &Path, out: &mut Vec<PluginInfo>) -> Result<()> {
@@ -219,7 +238,7 @@ fn tuid_to_hex(cid: &[i8; 16]) -> String {
     s
 }
 
-#[allow(clippy::cast_possible_wrap)]
+#[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
 fn hex_to_tuid(hex: &str) -> Option<TUID> {
     if hex.len() != 32 {
         return None;
@@ -360,7 +379,7 @@ mod mac {
 
 /// Per-platform VST3 bundle layout. Linux uses
 /// `Contents/<arch>-linux/<stem>.so`; Windows uses
-/// `Contents/<arch>-win/<stem>.vst3`. macOS goes through CFBundle
+/// `Contents/<arch>-win/<stem>.vst3`. macOS goes through `CFBundle`
 /// instead (see [`mac::MacBundle`]) so its binary lookup lives
 /// there.
 #[cfg(not(target_os = "macos"))]
@@ -392,9 +411,9 @@ fn bundle_binary_path(bundle: &Path) -> PathBuf {
 }
 
 /// RAII wrapper around the loaded module. On macOS this is a real
-/// `CFBundle` so the plugin's `bundleEntry` sees the CFPlugin /
-/// CFBundleGetIdentifier context it expects (raw dlopen crashes
-/// some bundles — Surge XT Effects calls into CFPlugin's
+/// `CFBundle` so the plugin's `bundleEntry` sees the `CFPlugin` /
+/// `CFBundleGetIdentifier` context it expects (raw dlopen crashes
+/// some bundles — Surge XT Effects calls into `CFPlugin`'s
 /// `AddInstanceForFactory` during init). On Linux / Windows the
 /// underlying file is a plain dynamic library; `libloading` is
 /// enough.
@@ -520,6 +539,8 @@ pub struct Vst3Plugin {
 
     // Hold the module open for the lifetime of the instance.
     _module: LoadedModule,
+    _host_context: ComWrapper<HostContext>,
+    host_restart_flags: Arc<AtomicI32>,
     component: ComPtr<IComponent>,
     processor: ComPtr<IAudioProcessor>,
     controller: ComPtr<IEditController>,
@@ -529,6 +550,18 @@ pub struct Vst3Plugin {
     separate_controller: bool,
     component_cp: Option<ComPtr<IConnectionPoint>>,
     controller_cp: Option<ComPtr<IConnectionPoint>>,
+    /// `IMidiMapping` from the edit controller, when the plugin
+    /// exposes one. Lets us turn MIDI CC / channel-pressure /
+    /// pitch-bend input into the parameter changes the processor
+    /// actually reads (VST3 delivers controller-style MIDI through
+    /// `IParameterChanges`, not `IEventList`).
+    midi_mapping: Option<ComPtr<IMidiMapping>>,
+
+    /// Host-thread `set_parameter` writes queued for delivery to
+    /// the processor via `inputParameterChanges` on the next
+    /// `process` call. Each entry is a `(param id, normalized
+    /// value)` pair; drained every block.
+    pending_param_changes: Vec<(ParamID, f64)>,
 
     param_count: usize,
     processing: bool,
@@ -543,6 +576,13 @@ impl Vst3Plugin {
     fn load_from(info: &PluginInfo) -> Result<Self> {
         let module = unsafe { LoadedModule::open(&info.path) }?;
         let factory = module.factory()?;
+        let host_restart_flags = Arc::new(AtomicI32::new(0));
+        let host_context = ComWrapper::new(HostContext {
+            restart_flags: Arc::clone(&host_restart_flags),
+        });
+        let host_application = host_context
+            .to_com_ptr::<IHostApplication>()
+            .ok_or_else(|| Error::Other("HostContext missing IHostApplication IID".into()))?;
 
         let cid = hex_to_tuid(&info.unique_id).ok_or_else(|| Error::LoadFailed {
             path: info.path.clone(),
@@ -559,10 +599,9 @@ impl Vst3Plugin {
             })?;
         let component = component_ptr;
 
-        // Initialize the component. Many plugins accept a NULL
-        // context (hosts only need to supply IHostApplication for
-        // plugins that look it up via queryInterface).
-        if unsafe { component.initialize(ptr::null_mut()) } != kResultOk {
+        if unsafe { component.initialize(host_application.as_ptr().cast::<FUnknown>()) }
+            != kResultOk
+        {
             return Err(Error::LoadFailed {
                 path: info.path.clone(),
                 reason: "IComponent::initialize returned non-OK".into(),
@@ -589,7 +628,9 @@ impl Vst3Plugin {
                     path: info.path.clone(),
                     reason: "factory.createInstance(IEditController) returned NULL".into(),
                 })?;
-            if unsafe { ctrl_ptr.initialize(ptr::null_mut()) } != kResultOk {
+            if unsafe { ctrl_ptr.initialize(host_application.as_ptr().cast::<FUnknown>()) }
+                != kResultOk
+            {
                 return Err(Error::LoadFailed {
                     path: info.path.clone(),
                     reason: "IEditController::initialize returned non-OK".into(),
@@ -612,6 +653,17 @@ impl Vst3Plugin {
             (ctrl, false)
         };
 
+        let component_handler = host_context
+            .to_com_ptr::<IComponentHandler>()
+            .ok_or_else(|| Error::Other("HostContext missing IComponentHandler IID".into()))?;
+        let handler_status = unsafe { controller.setComponentHandler(component_handler.as_ptr()) };
+        if handler_status != kResultOk && handler_status != kNotImplemented {
+            return Err(Error::LoadFailed {
+                path: info.path.clone(),
+                reason: format!("IEditController::setComponentHandler returned {handler_status}"),
+            });
+        }
+
         // Optional: connect the two connection points so the
         // plugin's component and controller can talk to each
         // other (param/audio synchronisation). Best-effort —
@@ -631,6 +683,11 @@ impl Vst3Plugin {
             (None, None)
         };
 
+        // IMidiMapping is optional — synths usually expose it,
+        // pure effects often don't. Absence just means CC input has
+        // nowhere to map to.
+        let midi_mapping = controller.as_com_ref().cast::<IMidiMapping>();
+
         let param_count_raw = unsafe { controller.getParameterCount() }.max(0);
         #[allow(clippy::cast_sign_loss)]
         let param_count = param_count_raw as usize;
@@ -641,23 +698,117 @@ impl Vst3Plugin {
         // at load time. (Some plugins are slow to create the view;
         // a heavier-weight host would defer this to first open.)
         info.has_editor = unsafe { create_editor_view(&controller) }.is_some();
+        let layouts = vec![discover_audio_layout(&component)];
 
         Ok(Self {
             info,
-            layouts: vec![BusLayout::stereo()],
+            layouts,
             active_layout: None,
             _module: module,
+            _host_context: host_context,
+            host_restart_flags,
             component,
             processor,
             controller,
             separate_controller,
             component_cp,
             controller_cp,
+            midi_mapping,
+            pending_param_changes: Vec::new(),
             param_count,
             processing: false,
             view: None,
             editor_open: false,
         })
+    }
+
+    /// Restore VST3 preset state from separate component and
+    /// controller chunks.
+    ///
+    /// VST3 `.vstpreset` files can store the audio component state
+    /// (`Comp`) and edit-controller state (`Cont`) separately. The
+    /// generic [`PluginCore::load_state`] method restores only a
+    /// single opaque blob, so hosts that parse `.vstpreset` files can
+    /// use this method to restore both chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the component rejects `component_state`,
+    /// when the controller rejects `component_state` via
+    /// `setComponentState`, or when a supplied `controller_state` is
+    /// rejected by `IEditController::setState`.
+    pub fn load_vst3_preset_state(
+        &mut self,
+        component_state: &[u8],
+        controller_state: Option<&[u8]>,
+    ) -> Result<()> {
+        self.load_component_state(component_state)?;
+        if let Some(controller_state) = controller_state {
+            self.load_controller_state(controller_state)?;
+        }
+        self.queue_changed_parameter_values()?;
+        Ok(())
+    }
+
+    fn load_component_state(&mut self, bytes: &[u8]) -> Result<()> {
+        let component_stream = stream_from_bytes(bytes)?;
+        let status = unsafe { self.component.setState(component_stream.as_ptr()) };
+        if status != kResultOk {
+            return Err(Error::Other(format!(
+                "IComponent::setState returned {status}"
+            )));
+        }
+
+        let controller_stream = stream_from_bytes(bytes)?;
+        let status = unsafe {
+            self.controller
+                .setComponentState(controller_stream.as_ptr())
+        };
+        if status != kResultOk && status != kNotImplemented {
+            return Err(Error::Other(format!(
+                "IEditController::setComponentState returned {status}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn load_controller_state(&mut self, bytes: &[u8]) -> Result<()> {
+        let stream = stream_from_bytes(bytes)?;
+        let status = unsafe { self.controller.setState(stream.as_ptr()) };
+        if status != kResultOk && status != kNotImplemented {
+            return Err(Error::Other(format!(
+                "IEditController::setState returned {status}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn queue_changed_parameter_values(&mut self) -> Result<()> {
+        let flags = self.host_restart_flags.swap(0, Ordering::AcqRel);
+        if flags & RestartFlags_::kParamValuesChanged == 0 {
+            return Ok(());
+        }
+        self.queue_all_parameter_values()
+    }
+
+    fn queue_all_parameter_values(&mut self) -> Result<()> {
+        self.pending_param_changes.clear();
+        self.pending_param_changes.reserve(self.param_count);
+        for index in 0..self.param_count {
+            let mut info = empty_parameter_info();
+            let i32_index = i32::try_from(index).map_err(|_| Error::InvalidParameter(index))?;
+            if unsafe { self.controller.getParameterInfo(i32_index, &raw mut info) } != kResultOk {
+                return Err(Error::InvalidParameter(index));
+            }
+            let value = unsafe { self.controller.getParamNormalized(info.id) };
+            if value.is_finite() {
+                // Reuse the host-thread setter queue; process() drains
+                // it into inputParameterChanges, delivering the restored
+                // values to the processor on the next block.
+                self.pending_param_changes.push((info.id, value));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -702,6 +853,103 @@ where
         return None;
     }
     unsafe { ComPtr::<I>::from_raw(obj.cast()) }
+}
+
+// VST3 enum constants are `c_int`/`c_uint` depending on platform, so
+// the `as i32` casts are only a potential wrap on some targets.
+#[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
+fn discover_audio_layout(component: &ComPtr<IComponent>) -> BusLayout {
+    let mut layout = BusLayout::new();
+    append_audio_buses(component, BusDirections_::kInput as i32, &mut layout);
+    append_audio_buses(component, BusDirections_::kOutput as i32, &mut layout);
+
+    if layout.outputs.is_empty() {
+        layout
+            .outputs
+            .push(Bus::main("Output", ChannelConfig::Stereo));
+    }
+
+    layout
+}
+
+#[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
+fn append_audio_buses(component: &ComPtr<IComponent>, direction: i32, layout: &mut BusLayout) {
+    let count = unsafe { component.getBusCount(MediaTypes_::kAudio as i32, direction) }.max(0);
+    for index in 0..count {
+        let Some(bus) = query_audio_bus(component, direction, index) else {
+            continue;
+        };
+        if direction == BusDirections_::kInput as i32 {
+            layout.inputs.push(bus);
+        } else {
+            layout.outputs.push(bus);
+        }
+    }
+}
+
+#[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
+fn query_audio_bus(component: &ComPtr<IComponent>, direction: i32, index: i32) -> Option<Bus> {
+    let mut info = empty_bus_info();
+    if unsafe { component.getBusInfo(MediaTypes_::kAudio as i32, direction, index, &raw mut info) }
+        != kResultOk
+    {
+        return None;
+    }
+
+    let channels = channel_config_for_count(info.channelCount)?;
+    let name = {
+        let raw = string128_to_string(&info.name);
+        if raw.is_empty() {
+            if direction == BusDirections_::kInput as i32 {
+                format!("Input {}", index + 1)
+            } else {
+                format!("Output {}", index + 1)
+            }
+        } else {
+            raw
+        }
+    };
+    let kind = if info.busType == BusTypes_::kMain as i32 || index == 0 {
+        BusKind::Main
+    } else if direction == BusDirections_::kInput as i32 {
+        BusKind::Sidechain
+    } else {
+        BusKind::Auxiliary
+    };
+
+    Some(Bus {
+        name,
+        kind,
+        channels,
+    })
+}
+
+fn empty_bus_info() -> BusInfo {
+    BusInfo {
+        mediaType: 0,
+        direction: 0,
+        channelCount: 0,
+        name: [0; 128],
+        busType: 0,
+        flags: 0,
+    }
+}
+
+fn channel_config_for_count(count: i32) -> Option<ChannelConfig> {
+    match count {
+        1 => Some(ChannelConfig::Mono),
+        2 => Some(ChannelConfig::Stereo),
+        n if n > 0 => Some(ChannelConfig::Discrete(u32::try_from(n).ok()?)),
+        _ => None,
+    }
+}
+
+fn speaker_arrangement_for_channels(channels: u32) -> u64 {
+    match channels {
+        0 => 0,
+        n if n >= u64::BITS => u64::MAX,
+        n => (1u64 << n) - 1,
+    }
 }
 
 impl Drop for Vst3Plugin {
@@ -783,11 +1031,19 @@ impl PluginCore for Vst3Plugin {
             return Err(Error::InvalidParameter(index));
         }
         let clamped = value.clamp(0.0, 1.0);
+        // Update the controller so any open editor reflects the new
+        // value...
         if unsafe { self.controller.setParamNormalized(info.id, clamped) } != kResultOk {
             return Err(Error::Other(
                 "IEditController::setParamNormalized failed".into(),
             ));
         }
+        // ...and queue the same change for the processor. For
+        // separate controller/processor plugins, setParamNormalized
+        // alone never reaches the audio side — the processor only
+        // observes parameter changes that arrive through
+        // inputParameterChanges during process().
+        self.pending_param_changes.push((info.id, clamped));
         Ok(())
     }
 
@@ -818,20 +1074,8 @@ impl PluginCore for Vst3Plugin {
     }
 
     fn load_state(&mut self, bytes: &[u8]) -> Result<()> {
-        let stream = ComWrapper::new(MemoryStream {
-            data: std::cell::RefCell::new(bytes.to_vec()),
-            position: std::cell::Cell::new(0),
-        });
-        let stream_ptr = stream
-            .to_com_ptr::<IBStream>()
-            .ok_or_else(|| Error::Other("MemoryStream missing IBStream IID".into()))?;
-        let status = unsafe { self.component.setState(stream_ptr.as_ptr()) };
-        if status != kResultOk {
-            return Err(Error::Other(format!(
-                "IComponent::setState returned {status}"
-            )));
-        }
-        Ok(())
+        self.load_component_state(bytes)?;
+        self.queue_changed_parameter_values()
     }
 
     fn activate(
@@ -840,17 +1084,33 @@ impl PluginCore for Vst3Plugin {
         sample_rate: f64,
         max_block_size: usize,
     ) -> Result<()> {
-        let mut input_arr = STEREO_ARRANGEMENT;
-        let mut output_arr = STEREO_ARRANGEMENT;
+        let input_channels = layout.total_input_channels();
+        let output_channels = layout.total_output_channels();
+        let mut input_arr = speaker_arrangement_for_channels(input_channels);
+        let mut output_arr = speaker_arrangement_for_channels(output_channels);
+        let input_arr_ptr = if input_channels == 0 {
+            ptr::null_mut()
+        } else {
+            &raw mut input_arr
+        };
+        let output_arr_ptr = if output_channels == 0 {
+            ptr::null_mut()
+        } else {
+            &raw mut output_arr
+        };
         let _ = unsafe {
-            self.processor
-                .setBusArrangements(&raw mut input_arr, 1, &raw mut output_arr, 1)
+            self.processor.setBusArrangements(
+                input_arr_ptr,
+                i32::from(input_channels > 0),
+                output_arr_ptr,
+                i32::from(output_channels > 0),
+            )
         };
 
         let mut setup = ProcessSetup {
-            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
             processMode: ProcessModes_::kRealtime as i32,
-            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             maxSamplesPerBlock: i32::try_from(max_block_size).unwrap_or(i32::MAX),
             sampleRate: sample_rate,
@@ -860,10 +1120,14 @@ impl PluginCore for Vst3Plugin {
                 "IAudioProcessor::setupProcessing failed".into(),
             ));
         }
+        self.activate_buses(true);
         if unsafe { self.component.setActive(1) } != kResultOk {
+            self.activate_buses(false);
             return Err(Error::Other("IComponent::setActive(true) failed".into()));
         }
         if unsafe { self.processor.setProcessing(1) } != kResultOk {
+            unsafe { self.component.setActive(0) };
+            self.activate_buses(false);
             return Err(Error::Other(
                 "IAudioProcessor::setProcessing(true) failed".into(),
             ));
@@ -881,6 +1145,7 @@ impl PluginCore for Vst3Plugin {
         if self.active_layout.is_some() {
             unsafe { self.component.setActive(0) };
         }
+        self.activate_buses(false);
         self.active_layout = None;
     }
     fn is_active(&self) -> bool {
@@ -892,6 +1157,34 @@ impl PluginCore for Vst3Plugin {
             return None;
         }
         Some(self)
+    }
+}
+
+impl Vst3Plugin {
+    // VST3 enum constants are `c_int`/`c_uint` depending on platform,
+    // so the `as i32` casts are only a potential wrap on some targets.
+    #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
+    fn activate_buses(&self, active: bool) {
+        let state = u8::from(active);
+        for media_type in [MediaTypes_::kAudio, MediaTypes_::kEvent] {
+            for direction in [BusDirections_::kInput, BusDirections_::kOutput] {
+                let count = unsafe {
+                    self.component
+                        .getBusCount(media_type as i32, direction as i32)
+                }
+                .max(0);
+                for index in 0..count {
+                    unsafe {
+                        self.component.activateBus(
+                            media_type as i32,
+                            direction as i32,
+                            index,
+                            state,
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1097,12 +1390,55 @@ impl Plugin<f32> for Vst3Plugin {
         }
         let frames = buffer.num_frames();
 
+        // Build the input parameter changes the processor reads:
+        // host-thread set_parameter() writes drained from the queue,
+        // plus any MIDI controller events the plugin maps through
+        // IMidiMapping (CC / channel pressure / pitch bend). Both
+        // arrive on the same VST3 path — inputParameterChanges —
+        // rather than the event list.
+        let input_param_changes = ComWrapper::new(ParameterChanges::default());
+        for (param_id, value) in self.pending_param_changes.drain(..) {
+            input_param_changes.push_point(param_id, 0, value);
+        }
+
         // Build an IEventList for the plugin's inputEvents slot.
-        // We translate truce-rack MIDI events to VST3 Event structs.
+        // Note-style MIDI goes here; controller-style MIDI is peeled
+        // off into the parameter changes above.
         let mut translated = EventBuffer::default();
         for event in events {
+            if let Some((ctrl_number, channel, normalized)) = midi_controller_assignment(event) {
+                // Controller-style MIDI only reaches the processor
+                // when the plugin maps it. With no IMidiMapping (or
+                // no assignment for this controller) there's no VST3
+                // path for it, so it's dropped rather than sent as a
+                // note event.
+                if let Some(mapping) = &self.midi_mapping {
+                    let mut param_id: ParamID = 0;
+                    let assigned = unsafe {
+                        mapping.getMidiControllerAssignment(
+                            0,
+                            channel,
+                            ctrl_number,
+                            &raw mut param_id,
+                        )
+                    } == kResultOk;
+                    if assigned {
+                        let offset = i32::try_from(event.sample_offset).unwrap_or(i32::MAX);
+                        input_param_changes.push_point(param_id, offset, normalized);
+                    }
+                }
+                continue;
+            }
             translated.push_rack(event);
         }
+        let input_param_changes_ptr = input_param_changes
+            .to_com_ptr::<IParameterChanges>()
+            .ok_or_else(|| Error::Other("ParameterChanges missing IParameterChanges IID".into()))?;
+        let output_param_changes = ComWrapper::new(ParameterChanges::default());
+        let output_param_changes_ptr = output_param_changes
+            .to_com_ptr::<IParameterChanges>()
+            .ok_or_else(|| Error::Other("ParameterChanges missing IParameterChanges IID".into()))?;
+
         let input_events_wrapper = ComWrapper::new(EventList3 {
             events: std::cell::RefCell::new(translated.events),
         });
@@ -1114,9 +1450,11 @@ impl Plugin<f32> for Vst3Plugin {
             .to_com_ptr::<IEventList>()
             .ok_or_else(|| Error::Other("EventList3 missing IEventList IID".into()))?;
 
-        let main_inputs = buffer.main_inputs();
-        let mut input_ptrs: Vec<*mut f32> =
-            main_inputs.iter().map(|c| c.as_ptr().cast_mut()).collect();
+        let mut input_ptrs: Vec<*mut f32> = buffer
+            .all_inputs()
+            .iter()
+            .map(|c| c.as_ptr().cast_mut())
+            .collect();
         let mut input_bus = AudioBusBuffers {
             numChannels: i32::try_from(input_ptrs.len()).unwrap_or(0),
             silenceFlags: 0,
@@ -1125,9 +1463,11 @@ impl Plugin<f32> for Vst3Plugin {
             },
         };
 
-        let main_outputs = buffer.main_outputs();
-        let mut output_ptrs: Vec<*mut f32> =
-            main_outputs.iter_mut().map(|c| c.as_mut_ptr()).collect();
+        let mut output_ptrs: Vec<*mut f32> = buffer
+            .all_outputs()
+            .iter_mut()
+            .map(|c| c.as_mut_ptr())
+            .collect();
         let mut output_bus = AudioBusBuffers {
             numChannels: i32::try_from(output_ptrs.len()).unwrap_or(0),
             silenceFlags: 0,
@@ -1141,19 +1481,26 @@ impl Plugin<f32> for Vst3Plugin {
         let mut process_context = context
             .transport
             .map(|t| build_vst3_context(&t, context.sample_rate));
-
         let mut data = ProcessData {
-            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
             processMode: ProcessModes_::kRealtime as i32,
-            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             numSamples: i32::try_from(frames).unwrap_or(i32::MAX),
-            numInputs: 1,
-            numOutputs: 1,
-            inputs: &raw mut input_bus,
-            outputs: &raw mut output_bus,
-            inputParameterChanges: ptr::null_mut::<IParameterChanges>(),
-            outputParameterChanges: ptr::null_mut::<IParameterChanges>(),
+            numInputs: i32::from(!input_ptrs.is_empty()),
+            numOutputs: i32::from(!output_ptrs.is_empty()),
+            inputs: if input_ptrs.is_empty() {
+                ptr::null_mut()
+            } else {
+                &raw mut input_bus
+            },
+            outputs: if output_ptrs.is_empty() {
+                ptr::null_mut()
+            } else {
+                &raw mut output_bus
+            },
+            inputParameterChanges: input_param_changes_ptr.as_ptr(),
+            outputParameterChanges: output_param_changes_ptr.as_ptr(),
             inputEvents: input_events_ptr.as_ptr(),
             outputEvents: output_events_ptr.as_ptr(),
             processContext: process_context
@@ -1166,6 +1513,7 @@ impl Plugin<f32> for Vst3Plugin {
             ((*(*processor_ptr).vtbl).process)(processor_ptr, &raw mut data)
         });
         if status == kResultOk {
+            drain_vst3_output_events(&output_events_wrapper, context.output_events);
             Ok(ProcessStatus::Continue)
         } else {
             Ok(ProcessStatus::Error)
@@ -1202,7 +1550,7 @@ impl EventBuffer {
                     pitch: 0,
                     tuning: 0.0,
                     velocity: 0.0,
-                    length: 0,
+                    length: -1,
                     noteId: -1,
                 },
             },
@@ -1220,7 +1568,7 @@ impl EventBuffer {
                         pitch: i16::from(note),
                         tuning: 0.0,
                         velocity: f32::from(velocity) / 127.0,
-                        length: 0,
+                        length: -1,
                         noteId: -1,
                     },
                 };
@@ -1259,14 +1607,289 @@ impl EventBuffer {
                 };
                 self.events.push(ev);
             }
-            // VST3 routes CC / ProgramChange / ChannelAftertouch /
-            // PitchBend / Sysex through IParameterChanges or
-            // IMidiMapping rather than IEventList. Wiring those is
-            // a follow-on; for hosting test purposes notes are the
-            // primary need.
+            // CC / channel pressure / pitch bend are peeled off in
+            // `process` and delivered through IParameterChanges via
+            // IMidiMapping (see `midi_controller_assignment`), so
+            // they never reach this translator. ProgramChange and
+            // Sysex have no IEventList representation and are
+            // dropped.
             _ => {}
         }
     }
+}
+
+/// Classify a rack MIDI event as a VST3 *controller-style* message
+/// and return `(controller number, channel, normalized value)`.
+///
+/// VST3 has no `IEventList` representation for CC, channel pressure,
+/// or pitch bend — they reach the processor as parameter changes,
+/// keyed by the `IMidiMapping` the plugin publishes. Note on/off and
+/// poly pressure are real `Event`s and return `None` here so they
+/// stay on the event-list path.
+fn midi_controller_assignment(
+    event: &truce_rack_core::events::Event,
+) -> Option<(CtrlNumber, i16, ParamValue)> {
+    use truce_rack_core::events::{EventBody, MidiData};
+    // `ControllerNumbers` is a C enum (c_int/c_uint); every value we
+    // use is well under i16::MAX, so the cast to CtrlNumber is exact.
+    #[allow(clippy::cast_possible_truncation)]
+    let ctrl = |n: ControllerNumbers| n as CtrlNumber;
+    let EventBody::Midi(midi) = event.body else {
+        return None;
+    };
+    match midi {
+        MidiData::ControlChange {
+            channel,
+            controller,
+            value,
+        } => Some((
+            CtrlNumber::from(controller & 0x7F),
+            i16::from(channel & 0x0F),
+            ParamValue::from(value & 0x7F) / 127.0,
+        )),
+        MidiData::ChannelAftertouch { channel, pressure } => Some((
+            ctrl(ControllerNumbers_::kAfterTouch),
+            i16::from(channel & 0x0F),
+            ParamValue::from(pressure & 0x7F) / 127.0,
+        )),
+        MidiData::PitchBend { channel, value } => Some((
+            ctrl(ControllerNumbers_::kPitchBend),
+            i16::from(channel & 0x0F),
+            ParamValue::from(value & 0x3FFF) / 16383.0,
+        )),
+        _ => None,
+    }
+}
+
+/// Host-side `IParameterChanges` — a flat list of per-parameter
+/// value queues. We populate the input instance before `process`
+/// (`set_parameter` writes + mapped MIDI controllers) and hand the
+/// plugin an empty output instance to record automation into.
+#[derive(Default)]
+struct ParameterChanges {
+    queues: std::cell::RefCell<Vec<ComWrapper<ParamValueQueue>>>,
+}
+
+impl ParameterChanges {
+    /// Append a `(sample offset, value)` point for `param_id`,
+    /// reusing the parameter's existing queue when one is already
+    /// present. Points must stay sorted by offset within a queue;
+    /// callers feed events in block order so appends preserve that.
+    fn push_point(&self, param_id: ParamID, sample_offset: i32, value: ParamValue) {
+        let mut queues = self.queues.borrow_mut();
+        if let Some(queue) = queues.iter().find(|q| q.param_id == param_id) {
+            queue.points.borrow_mut().push((sample_offset, value));
+            return;
+        }
+        queues.push(ComWrapper::new(ParamValueQueue {
+            param_id,
+            points: std::cell::RefCell::new(vec![(sample_offset, value)]),
+        }));
+    }
+}
+
+impl Class for ParameterChanges {
+    type Interfaces = (IParameterChanges,);
+}
+
+#[allow(clippy::cast_sign_loss)]
+impl IParameterChangesTrait for ParameterChanges {
+    unsafe fn getParameterCount(&self) -> i32 {
+        i32::try_from(self.queues.borrow().len()).unwrap_or(i32::MAX)
+    }
+
+    unsafe fn getParameterData(&self, index: i32) -> *mut IParamValueQueue {
+        if index < 0 {
+            return ptr::null_mut();
+        }
+        let queues = self.queues.borrow();
+        queues.get(index as usize).map_or(ptr::null_mut(), |queue| {
+            queue
+                .as_com_ref::<IParamValueQueue>()
+                .map_or(ptr::null_mut(), |r| r.as_ptr())
+        })
+    }
+
+    unsafe fn addParameterData(
+        &self,
+        id: *const ParamID,
+        index: *mut i32,
+    ) -> *mut IParamValueQueue {
+        if id.is_null() {
+            return ptr::null_mut();
+        }
+        let param_id = unsafe { *id };
+        let mut queues = self.queues.borrow_mut();
+        let pos = queues
+            .iter()
+            .position(|q| q.param_id == param_id)
+            .unwrap_or_else(|| {
+                queues.push(ComWrapper::new(ParamValueQueue {
+                    param_id,
+                    points: std::cell::RefCell::new(Vec::new()),
+                }));
+                queues.len() - 1
+            });
+        if !index.is_null() {
+            unsafe { *index = i32::try_from(pos).unwrap_or(i32::MAX) };
+        }
+        queues[pos]
+            .as_com_ref::<IParamValueQueue>()
+            .map_or(ptr::null_mut(), |r| r.as_ptr())
+    }
+}
+
+/// One parameter's ordered list of automation points, exposed to
+/// the plugin as `IParamValueQueue`.
+#[derive(Default)]
+struct ParamValueQueue {
+    param_id: ParamID,
+    points: std::cell::RefCell<Vec<(i32, ParamValue)>>,
+}
+
+impl Class for ParamValueQueue {
+    type Interfaces = (IParamValueQueue,);
+}
+
+#[allow(clippy::cast_sign_loss)]
+impl IParamValueQueueTrait for ParamValueQueue {
+    unsafe fn getParameterId(&self) -> ParamID {
+        self.param_id
+    }
+
+    unsafe fn getPointCount(&self) -> i32 {
+        i32::try_from(self.points.borrow().len()).unwrap_or(i32::MAX)
+    }
+
+    unsafe fn getPoint(&self, index: i32, sample_offset: *mut i32, value: *mut ParamValue) -> i32 {
+        if index < 0 || sample_offset.is_null() || value.is_null() {
+            return -1;
+        }
+        let points = self.points.borrow();
+        let Some(&(offset, val)) = points.get(index as usize) else {
+            return -1;
+        };
+        unsafe {
+            *sample_offset = offset;
+            *value = val;
+        }
+        kResultOk
+    }
+
+    unsafe fn addPoint(&self, sample_offset: i32, value: ParamValue, index: *mut i32) -> i32 {
+        let mut points = self.points.borrow_mut();
+        points.push((sample_offset, value));
+        if !index.is_null() {
+            unsafe { *index = i32::try_from(points.len() - 1).unwrap_or(i32::MAX) };
+        }
+        kResultOk
+    }
+}
+
+fn drain_vst3_output_events(events: &EventList3, output_events: &mut EventList) {
+    for event in events.events.borrow().iter() {
+        if let Some(event) = rack_event_from_vst3(event) {
+            output_events.push(event);
+        }
+    }
+}
+
+fn rack_event_from_vst3(event: &Event) -> Option<RackEvent> {
+    let sample_offset = u32::try_from(event.sampleOffset.max(0)).ok()?;
+    // `EventTypes_` is a C enum whose repr is `i32` on MSVC and `u32`
+    // elsewhere, while `Event::type` is `u16`. Normalize the tags to
+    // the field's width up front so the comparisons compile on every
+    // target — same `u16::try_from` idiom `EventBuffer::push_rack`
+    // uses on the way out.
+    let note_on = u16::try_from(EventTypes_::kNoteOnEvent).unwrap_or(u16::MAX);
+    let note_off = u16::try_from(EventTypes_::kNoteOffEvent).unwrap_or(u16::MAX);
+    let poly_pressure = u16::try_from(EventTypes_::kPolyPressureEvent).unwrap_or(u16::MAX);
+    let legacy_cc = u16::try_from(EventTypes_::kLegacyMIDICCOutEvent).unwrap_or(u16::MAX);
+    let body = match event.r#type {
+        t if t == note_on => {
+            let note = unsafe { event.__field0.noteOn };
+            EventBody::Midi(MidiData::NoteOn {
+                channel: midi_channel(note.channel),
+                note: midi_note(note.pitch),
+                velocity: normalized_to_midi(note.velocity),
+            })
+        }
+        t if t == note_off => {
+            let note = unsafe { event.__field0.noteOff };
+            EventBody::Midi(MidiData::NoteOff {
+                channel: midi_channel(note.channel),
+                note: midi_note(note.pitch),
+                velocity: normalized_to_midi(note.velocity),
+            })
+        }
+        t if t == poly_pressure => {
+            let pressure = unsafe { event.__field0.polyPressure };
+            EventBody::Midi(MidiData::PolyAftertouch {
+                channel: midi_channel(pressure.channel),
+                note: midi_note(pressure.pitch),
+                pressure: normalized_to_midi(pressure.pressure),
+            })
+        }
+        t if t == legacy_cc => {
+            let cc = unsafe { event.__field0.midiCCOut };
+            legacy_midi_cc_to_rack(cc.controlNumber, cc.channel, cc.value, cc.value2)?
+        }
+        _ => return None,
+    };
+
+    Some(RackEvent {
+        sample_offset,
+        body,
+    })
+}
+
+fn legacy_midi_cc_to_rack(control: u8, channel: i8, value: i8, value2: i8) -> Option<EventBody> {
+    let channel = midi_channel(i16::from(channel));
+    let value = midi_data_byte(value);
+    let body = match control {
+        0..=127 => EventBody::Midi(MidiData::ControlChange {
+            channel,
+            controller: control,
+            value,
+        }),
+        CTRL_AFTERTOUCH => EventBody::Midi(MidiData::ChannelAftertouch {
+            channel,
+            pressure: value,
+        }),
+        CTRL_PITCH_BEND => {
+            let lsb = u16::from(value & 0x7F);
+            let msb = u16::from(midi_data_byte(value2) & 0x7F);
+            EventBody::Midi(MidiData::PitchBend {
+                channel,
+                value: lsb | (msb << 7),
+            })
+        }
+        CTRL_PROGRAM_CHANGE => EventBody::Midi(MidiData::ProgramChange {
+            channel,
+            program: value,
+        }),
+        _ => return None,
+    };
+    Some(body)
+}
+
+fn midi_channel(value: i16) -> u8 {
+    u8::try_from(value).unwrap_or(0) & 0x0F
+}
+
+fn midi_note(value: i16) -> u8 {
+    u8::try_from(value.clamp(0, 127)).unwrap_or(0)
+}
+
+#[allow(clippy::cast_sign_loss)]
+fn midi_data_byte(value: i8) -> u8 {
+    // Bit-pattern reinterpret; we only keep the low 7 data bits.
+    (value as u8) & 0x7F
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn normalized_to_midi(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 127.0).round() as u8
 }
 
 #[derive(Default)]
@@ -1308,6 +1931,70 @@ impl IEventListTrait for EventList3 {
 // ---------------------------------------------------------------------------
 // MemoryStream — in-memory IBStream impl for state save/load.
 // ---------------------------------------------------------------------------
+
+fn stream_from_bytes(bytes: &[u8]) -> Result<ComPtr<IBStream>> {
+    ComWrapper::new(MemoryStream {
+        data: std::cell::RefCell::new(bytes.to_vec()),
+        position: std::cell::Cell::new(0),
+    })
+    .to_com_ptr::<IBStream>()
+    .ok_or_else(|| Error::Other("MemoryStream missing IBStream IID".into()))
+}
+
+struct HostContext {
+    restart_flags: Arc<AtomicI32>,
+}
+
+impl Class for HostContext {
+    type Interfaces = (IHostApplication, IComponentHandler);
+}
+
+impl IHostApplicationTrait for HostContext {
+    unsafe fn getName(&self, name: *mut String128) -> i32 {
+        if name.is_null() {
+            return -1;
+        }
+        let out = unsafe { &mut *name };
+        out.fill(0);
+        for (slot, unit) in out.iter_mut().zip("truce-rack".encode_utf16()) {
+            *slot = unit as _;
+        }
+        kResultOk
+    }
+
+    unsafe fn createInstance(
+        &self,
+        _cid: *mut TUID,
+        _iid: *mut TUID,
+        obj: *mut *mut std::ffi::c_void,
+    ) -> i32 {
+        if !obj.is_null() {
+            unsafe {
+                *obj = ptr::null_mut();
+            }
+        }
+        kNotImplemented
+    }
+}
+
+impl IComponentHandlerTrait for HostContext {
+    unsafe fn beginEdit(&self, _id: ParamID) -> i32 {
+        kResultOk
+    }
+
+    unsafe fn performEdit(&self, _id: ParamID, _value_normalized: ParamValue) -> i32 {
+        kResultOk
+    }
+
+    unsafe fn endEdit(&self, _id: ParamID) -> i32 {
+        kResultOk
+    }
+
+    unsafe fn restartComponent(&self, flags: i32) -> i32 {
+        self.restart_flags.fetch_or(flags, Ordering::AcqRel);
+        kResultOk
+    }
+}
 
 /// Backing storage for the `IBStream` we hand to
 /// `IComponent::setState` / `getState`. The plugin reads and
@@ -1381,7 +2068,7 @@ impl IBStreamTrait for MemoryStream {
         kResultOk
     }
 
-    #[allow(clippy::cast_possible_wrap)]
+    #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
     unsafe fn seek(&self, pos: i64, mode: i32, result: *mut i64) -> i32 {
         // VST3 SDK SeekMode: 0 = `SeekSet`, 1 = `SeekCur`, 2 = `SeekEnd`.
         let data_len = self.data.borrow().len() as i64;
@@ -1405,7 +2092,7 @@ impl IBStreamTrait for MemoryStream {
         kResultOk
     }
 
-    #[allow(clippy::cast_possible_wrap)]
+    #[allow(clippy::cast_possible_wrap, clippy::unnecessary_cast)]
     unsafe fn tell(&self, pos: *mut i64) -> i32 {
         if pos.is_null() {
             return -1;

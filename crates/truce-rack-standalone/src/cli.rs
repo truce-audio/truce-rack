@@ -160,8 +160,9 @@ pub fn run(prog: &str, args: Vec<OsString>) {
 /// status 2 on a malformed `--output-channels`.
 fn install_device_config(pargs: &mut pico_args::Arguments) {
     let output_device: Option<String> = pargs.opt_value_from_str("--output").unwrap_or(None);
-    let output_channels: Option<String> =
-        pargs.opt_value_from_str("--output-channels").unwrap_or(None);
+    let output_channels: Option<String> = pargs
+        .opt_value_from_str("--output-channels")
+        .unwrap_or(None);
     let sample_rate: Option<u32> = pargs.opt_value_from_str("--sample-rate").unwrap_or(None);
     let buffer_size: Option<u32> = pargs.opt_value_from_str("--buffer").unwrap_or(None);
 
