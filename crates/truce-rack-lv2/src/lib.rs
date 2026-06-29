@@ -824,8 +824,11 @@ impl Lv2Plugin {
         // URIDs for the host transport (`time:Position`) atom we
         // inject each block. Mapped once here so process() stays
         // allocation-free.
-        let map_uri =
-            |uri: &[u8]| features.urid_map.map_uri(unsafe { CStr::from_ptr(uri.as_ptr().cast()) });
+        let map_uri = |uri: &[u8]| {
+            features
+                .urid_map
+                .map_uri(unsafe { CStr::from_ptr(uri.as_ptr().cast()) })
+        };
         let time_urids = TimeUrids {
             position: map_uri(lv2_raw::time::LV2_TIME__POSITION),
             frame: map_uri(lv2_raw::time::LV2_TIME__FRAME),
@@ -976,7 +979,13 @@ const TIME_POSITION_MAX_BYTES: usize =
 /// `buf + off` must have room for the property header plus `value`
 /// rounded up to 8 bytes; callers guarantee this via a single
 /// up-front [`TIME_POSITION_MAX_BYTES`] check.
-unsafe fn write_property(buf: *mut u8, off: usize, key: LV2Urid, value_type: LV2Urid, value: &[u8]) -> usize {
+unsafe fn write_property(
+    buf: *mut u8,
+    off: usize,
+    key: LV2Urid,
+    value_type: LV2Urid,
+    value: &[u8],
+) -> usize {
     let prop = unsafe { &mut *buf.add(off).cast::<LV2AtomPropertyBody>() };
     prop.key = key;
     prop.context = 0;
@@ -1024,10 +1033,26 @@ unsafe fn write_time_position(
 
     // speed: 1.0 while rolling, 0.0 when stopped.
     let speed: f32 = if t.playing { 1.0 } else { 0.0 };
-    off = unsafe { write_property(buf, off, urids.speed, urids.atom_float, &speed.to_ne_bytes()) };
+    off = unsafe {
+        write_property(
+            buf,
+            off,
+            urids.speed,
+            urids.atom_float,
+            &speed.to_ne_bytes(),
+        )
+    };
 
     if let Some(samples) = t.song_position_samples {
-        off = unsafe { write_property(buf, off, urids.frame, urids.atom_long, &samples.to_ne_bytes()) };
+        off = unsafe {
+            write_property(
+                buf,
+                off,
+                urids.frame,
+                urids.atom_long,
+                &samples.to_ne_bytes(),
+            )
+        };
     }
     if let Some(tempo) = t.tempo_bpm {
         let bpm = tempo as f32;
@@ -1036,25 +1061,44 @@ unsafe fn write_time_position(
     if let Some((num, den)) = t.time_signature {
         let beats_per_bar = num as f32;
         off = unsafe {
-            write_property(buf, off, urids.beats_per_bar, urids.atom_float, &beats_per_bar.to_ne_bytes())
+            write_property(
+                buf,
+                off,
+                urids.beats_per_bar,
+                urids.atom_float,
+                &beats_per_bar.to_ne_bytes(),
+            )
         };
         let beat_unit = den as i32;
         off = unsafe {
-            write_property(buf, off, urids.beat_unit, urids.atom_int, &beat_unit.to_ne_bytes())
+            write_property(
+                buf,
+                off,
+                urids.beat_unit,
+                urids.atom_int,
+                &beat_unit.to_ne_bytes(),
+            )
         };
 
         // Bar / barBeat need the musical position too.
         let beats_per_bar_qn = f64::from(num) * 4.0 / f64::from(den.max(1));
         if let Some(bar_start) = t.bar_start_beats {
             let bar = (bar_start / beats_per_bar_qn.max(f64::EPSILON)).round() as i64;
-            off = unsafe { write_property(buf, off, urids.bar, urids.atom_long, &bar.to_ne_bytes()) };
+            off =
+                unsafe { write_property(buf, off, urids.bar, urids.atom_long, &bar.to_ne_bytes()) };
 
             if let Some(beats) = t.song_position_beats {
                 // Quarter notes since the bar, expressed in this
                 // signature's beats (beatUnit per whole note).
                 let bar_beat = ((beats - bar_start) * f64::from(den) / 4.0) as f32;
                 off = unsafe {
-                    write_property(buf, off, urids.bar_beat, urids.atom_float, &bar_beat.to_ne_bytes())
+                    write_property(
+                        buf,
+                        off,
+                        urids.bar_beat,
+                        urids.atom_float,
+                        &bar_beat.to_ne_bytes(),
+                    )
                 };
             }
         }

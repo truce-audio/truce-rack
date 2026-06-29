@@ -48,11 +48,11 @@ use vst3::Steinberg::Vst::{
     IAudioProcessorTrait, IComponent, IComponentHandler, IComponentHandlerTrait, IComponentTrait,
     IConnectionPoint, IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList,
     IEventListTrait, IHostApplication, IHostApplicationTrait, IMidiMapping, IMidiMappingTrait,
-    IParameterChanges, IParameterChangesTrait, IParamValueQueue, IParamValueQueueTrait, MediaTypes_,
-    NoteOffEvent, NoteOnEvent, ParamID, ParamValue, ParameterInfo as Vst3ParameterInfo,
-    ParameterInfo_::ParameterFlags_, PolyPressureEvent, ProcessContext as Vst3ProcessContext,
-    ProcessContext_::StatesAndFlags_, ProcessData, ProcessModes_, ProcessSetup, RestartFlags_,
-    String128, SymbolicSampleSizes_, ViewType,
+    IParamValueQueue, IParamValueQueueTrait, IParameterChanges, IParameterChangesTrait,
+    MediaTypes_, NoteOffEvent, NoteOnEvent, ParamID, ParamValue,
+    ParameterInfo as Vst3ParameterInfo, ParameterInfo_::ParameterFlags_, PolyPressureEvent,
+    ProcessContext as Vst3ProcessContext, ProcessContext_::StatesAndFlags_, ProcessData,
+    ProcessModes_, ProcessSetup, RestartFlags_, String128, SymbolicSampleSizes_, ViewType,
 };
 use vst3::Steinberg::{
     FUnknown, IBStream, IBStreamTrait, IPlugView, IPlugViewTrait, IPluginBaseTrait, IPluginFactory,
@@ -573,7 +573,6 @@ pub struct Vst3Plugin {
 }
 
 impl Vst3Plugin {
-    #[allow(clippy::too_many_lines)]
     fn load_from(info: &PluginInfo) -> Result<Self> {
         let module = unsafe { LoadedModule::open(&info.path) }?;
         let factory = module.factory()?;
@@ -1380,7 +1379,6 @@ fn build_vst3_context(t: &TransportInfo, sample_rate: f64) -> Vst3ProcessContext
 }
 
 impl Plugin<f32> for Vst3Plugin {
-    #[allow(clippy::too_many_lines)]
     fn process(
         &mut self,
         buffer: &mut AudioBuffer<'_, f32>,
@@ -1417,7 +1415,12 @@ impl Plugin<f32> for Vst3Plugin {
                 if let Some(mapping) = &self.midi_mapping {
                     let mut param_id: ParamID = 0;
                     let assigned = unsafe {
-                        mapping.getMidiControllerAssignment(0, channel, ctrl_number, &raw mut param_id)
+                        mapping.getMidiControllerAssignment(
+                            0,
+                            channel,
+                            ctrl_number,
+                            &raw mut param_id,
+                        )
                     } == kResultOk;
                     if assigned {
                         let offset = i32::try_from(event.sample_offset).unwrap_or(i32::MAX);
@@ -1707,19 +1710,26 @@ impl IParameterChangesTrait for ParameterChanges {
         })
     }
 
-    unsafe fn addParameterData(&self, id: *const ParamID, index: *mut i32) -> *mut IParamValueQueue {
+    unsafe fn addParameterData(
+        &self,
+        id: *const ParamID,
+        index: *mut i32,
+    ) -> *mut IParamValueQueue {
         if id.is_null() {
             return ptr::null_mut();
         }
         let param_id = unsafe { *id };
         let mut queues = self.queues.borrow_mut();
-        let pos = queues.iter().position(|q| q.param_id == param_id).unwrap_or_else(|| {
-            queues.push(ComWrapper::new(ParamValueQueue {
-                param_id,
-                points: std::cell::RefCell::new(Vec::new()),
-            }));
-            queues.len() - 1
-        });
+        let pos = queues
+            .iter()
+            .position(|q| q.param_id == param_id)
+            .unwrap_or_else(|| {
+                queues.push(ComWrapper::new(ParamValueQueue {
+                    param_id,
+                    points: std::cell::RefCell::new(Vec::new()),
+                }));
+                queues.len() - 1
+            });
         if !index.is_null() {
             unsafe { *index = i32::try_from(pos).unwrap_or(i32::MAX) };
         }

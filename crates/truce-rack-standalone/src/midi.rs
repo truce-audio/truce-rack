@@ -393,7 +393,10 @@ mod tests {
 
     #[test]
     fn encode_decode_roundtrips() {
-        assert_eq!(MidiChannel::decode(MidiChannel::Omni.encode()), MidiChannel::Omni);
+        assert_eq!(
+            MidiChannel::decode(MidiChannel::Omni.encode()),
+            MidiChannel::Omni
+        );
         for c in 0u8..16 {
             let ch = MidiChannel::Only(c);
             assert_eq!(MidiChannel::decode(ch.encode()), ch);

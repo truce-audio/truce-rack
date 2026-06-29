@@ -297,7 +297,10 @@ mod tests {
     fn parse_routes() {
         assert_eq!(ChannelRoute::parse("direct"), Some(ChannelRoute::Direct));
         assert_eq!(ChannelRoute::parse("all"), Some(ChannelRoute::Direct));
-        assert_eq!(ChannelRoute::parse("3"), Some(ChannelRoute::Mono { base: 2 }));
+        assert_eq!(
+            ChannelRoute::parse("3"),
+            Some(ChannelRoute::Mono { base: 2 })
+        );
         assert_eq!(
             ChannelRoute::parse("3-4"),
             Some(ChannelRoute::Stereo { base: 2 })
